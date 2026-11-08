@@ -22,10 +22,15 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
-      - name: Build debug APK
+      - name: Build debug APK (compiles the Rust library via cargo-ndk)
         run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
