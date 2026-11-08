@@ -6,3 +6,4 @@ local.properties
 *.apk
 .DS_Store
 target/
+app/src/main/jniLibs/
