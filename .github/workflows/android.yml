@@ -6,6 +6,14 @@ on:
   workflow_dispatch:
 
 jobs:
+  rust-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run runtime tests
+        run: cargo test --manifest-path native/runtime/Cargo.toml
+
   build:
     runs-on: ubuntu-latest
     steps:
