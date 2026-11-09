@@ -14,7 +14,40 @@ jobs:
       - name: Run runtime tests
         run: cargo test --manifest-path native/runtime/Cargo.toml
 
+  # Builds a static aarch64 PRoot (talloc linked in, unbundled loader) from source with
+  # the NDK version the upstream recipe was written for. The recipe repo is pinned to a
+  # signed commit; PRoot itself is fetched by upstream's get-proot.sh at tag v0.15_release.
+  proot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: green-green-avk/build-proot-android
+          ref: 01f83b8841358450c78333d1b33ab30d4943bec4
+      - name: Install NDK 23.2.8568313
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;23.2.8568313"
+      - name: Build PRoot for aarch64
+        run: |
+          sed -i "s|^NDK=.*|NDK=\"$ANDROID_HOME/ndk/23.2.8568313\"|" config
+          sed -i "s|^ARCHS=.*|ARCHS='aarch64'|" config
+          ./get-talloc.sh
+          ./get-proot.sh
+          ./make-talloc-static.sh
+          ./make-proot-for-apk.sh
+      - name: Collect jniLibs
+        run: |
+          mkdir -p out/arm64-v8a
+          cp build/root-aarch64/root-apk/bin/lib*.so out/arm64-v8a/
+          ls -l out/arm64-v8a
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proot-aarch64
+          path: out
+
   build:
+    needs: proot
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,6 +60,10 @@ jobs:
           targets: aarch64-linux-android
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
+      - uses: actions/download-artifact@v4
+        with:
+          name: proot-aarch64
+          path: app/src/main/jniLibs
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
