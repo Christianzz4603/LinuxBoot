@@ -33,6 +33,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -348,8 +349,11 @@ private fun Line(text: String, color: Color = Fg, bold: Boolean = false) {
 }
 
 @Composable
-fun FirmwareApp(info: SystemInfo, onShutdown: () -> Unit) {
+fun FirmwareApp(initialInfo: SystemInfo, onShutdown: () -> Unit) {
     val vm: FirmwareViewModel = viewModel()
+    val context = LocalContext.current
+    // Re-read real RAM/storage figures each time the screen changes instead of showing launch-time values.
+    val info = remember(vm.screen) { if (vm.screen == Screen.Home && false) initialInfo else SystemInfo.detect(context) }
     if (vm.screen == Screen.Viewer) {
         ViewerScreen(vm)
         return
