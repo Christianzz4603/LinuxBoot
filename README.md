@@ -20,14 +20,14 @@ CI (GitHub Actions) builds the APK, builds PRoot from source, and runs the Rust 
 | Embedded VNC client (RFB 3.8, VNC auth, Raw/CopyRect/DesktopSize) | **Unit-tested in CI** against an in-process fake server |
 | Viewer UI: trackpad gestures, double-tap-hold drag, 2-finger scroll/right-click, 3-finger middle click, pinch zoom, pan, direct-touch mode, floating toolbar (minimize/auto-hide/pin/drag), virtual keyboard with modifier latching, hardware keyboard + mouse | Implemented, compiles; gestures untested on a device |
 | RAM check before starting a graphical session | Implemented (700 MiB free heuristic) |
-| Debian, Ubuntu, Arch, Fedora, Void | **Not in the catalog**: no verified ARM64 source resolved yet (see below) |
+| Debian 13, Ubuntu 24.04, Arch Linux ARM, Fedora 44, Void (Linux Containers images; SHA-256 from SHA256SUMS) | In the catalog; not installed or run on a device. Desktop recipe for Debian/Ubuntu only |
 | Linux user creation (the desktop currently runs as PRoot's fake root) | Not done |
 | Backup/restore, CPU/RAM live monitor, recovery shell | Not done |
 | Tested on a real device / low-end phone | **No** |
 
-## Why only Alpine
+## Where distros come from
 
-A distro is listed only after its ARM64 download and checksum source were verified. Alpine's official minirootfs and its `.sha256` file are. Debian's official `dist-arm64v8` branch publishes a checksum but not the tarball at a stable raw URL (its OCI layer sits behind Git LFS), so Debian is not added until a verifiable source is confirmed. Ubuntu Base (official `SHA256SUMS`) is the obvious next candidate.
+Alpine uses its own official minirootfs and `.sha256` file. Debian, Ubuntu, Arch, Fedora and Void use the arm64 `rootfs.tar.xz` images published by the Linux Containers project (images.linuxcontainers.org), because Debian's own `dist-arm64v8` branch does not publish a usable tarball URL. These are third-party builds of each distribution, not the distribution's own release. LinuxBoot reads the newest complete build and its SHA-256 from the `SHA256SUMS` next to it at install time; the checksum comes from the same server, so it detects corruption but not a compromised server, and the `.asc` signatures are not verified yet. I checked Debian, Ubuntu, Arch and Void builds exist; Fedora 44 was not individually checked (the resolver reports an error if its build is incomplete). Arch, Fedora and Void install the rootfs and shell only: their desktop recipes need package-manager workarounds under PRoot that I have not verified.
 
 ## PRoot build
 
