@@ -27,10 +27,14 @@ import linuxboot.runtime.ProotRuntime
 import linuxboot.storage.Fs
 import linuxboot.storage.LinuxBootStorage
 import linuxboot.storage.StorageDecision
+import linuxboot.system.SystemInfo
 import linuxboot.system.formatBytes
 import java.io.File
 import kotlin.math.max
 import kotlin.math.min
+
+/** Rough floor for Xvnc + XFCE; below this Android is likely to kill the session. A heuristic, not a measurement. */
+private const val MIN_FREE_RAM = 700L * 1024 * 1024
 
 sealed interface Screen {
     data object Home : Screen
@@ -271,6 +275,14 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         if (desktopBusy != null) return
+        val mem = SystemInfo.detect(getApplication())
+        if (mem.lowMemory || mem.availMemBytes < MIN_FREE_RAM) {
+            val msg = "NOT ENOUGH FREE RAM TO START A DESKTOP: ${formatBytes(mem.availMemBytes)} free, " +
+                "about ${formatBytes(MIN_FREE_RAM)} needed. Close other apps and try again."
+            notice = msg
+            desktopStatus = listOf(msg)
+            return
+        }
         val (w, h) = if (width > 0 && height > 0) width to height else autoGeometry()
         desktopBusy = "STARTING DESKTOP"
         desktopStatus = emptyList()
