@@ -25,6 +25,8 @@ data class DistroMetadata(
     val sha256: String,
     val installedAt: Long,
     val message: String? = null,
+    val desktop: String? = null,
+    val vncPassword: String? = null,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("id", id)
@@ -38,6 +40,8 @@ data class DistroMetadata(
         .put("sha256", sha256)
         .put("installedAt", installedAt)
         .put("message", message)
+        .put("desktop", desktop)
+        .put("vncPassword", vncPassword)
 
     companion object {
         fun fromJson(o: JSONObject) = DistroMetadata(
@@ -52,6 +56,8 @@ data class DistroMetadata(
             sha256 = o.getString("sha256"),
             installedAt = o.getLong("installedAt"),
             message = if (o.has("message")) o.getString("message") else null,
+            desktop = if (o.has("desktop")) o.getString("desktop") else null,
+            vncPassword = if (o.has("vncPassword")) o.getString("vncPassword") else null,
         )
     }
 }
