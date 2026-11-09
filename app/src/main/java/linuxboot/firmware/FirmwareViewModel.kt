@@ -12,7 +12,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import linuxboot.desktop.DesktopSession
+import linuxboot.desktop.RfbClient
+import linuxboot.desktop.ViewerController
 import linuxboot.distro.Catalog
+import linuxboot.distro.DesktopInstaller
 import linuxboot.distro.DistroMetadata
 import linuxboot.distro.DistroStore
 import linuxboot.distro.InstallStatus
@@ -23,7 +27,10 @@ import linuxboot.runtime.ProotRuntime
 import linuxboot.storage.Fs
 import linuxboot.storage.LinuxBootStorage
 import linuxboot.storage.StorageDecision
+import linuxboot.system.formatBytes
 import java.io.File
+import kotlin.math.max
+import kotlin.math.min
 
 sealed interface Screen {
     data object Home : Screen
@@ -33,6 +40,7 @@ sealed interface Screen {
     data object Config : Screen
     data object Hardware : Screen
     data object Recovery : Screen
+    data object Viewer : Screen
     data class InstallDetail(val id: String) : Screen
     data class DistroDetail(val id: String) : Screen
     data class ConfirmRemove(val id: String) : Screen
@@ -48,9 +56,13 @@ sealed interface SourceState {
 class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
     val storage = LinuxBootStorage(app)
     val proot = ProotRuntime(app)
+    val session = DesktopSession(proot)
     private val store = DistroStore(storage)
     private val installer = Installer(storage, store)
     private var job: Job? = null
+    private var desktopJob: Job? = null
+    private var client: RfbClient? = null
+    private var viewerId: String? = null
 
     var screen by mutableStateOf<Screen>(Screen.Home)
         private set
@@ -73,6 +85,14 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
     var shellText by mutableStateOf<String?>(null)
         private set
     var shellRunning by mutableStateOf(false)
+        private set
+    var viewer by mutableStateOf<ViewerController?>(null)
+        private set
+    var desktopStatus by mutableStateOf<List<String>>(emptyList())
+        private set
+    var desktopBusy by mutableStateOf<String?>(null)
+        private set
+    var sessionRunning by mutableStateOf(false)
         private set
 
     init {
@@ -189,9 +209,146 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---- desktop --------------------------------------------------------------------------
+
+    private fun log(line: String) {
+        desktopStatus = (desktopStatus + line).takeLast(200)
+    }
+
+    /** Installs XFCE and a VNC server inside the distribution, streaming the package manager's output. */
+    fun installDesktop(id: String) {
+        val m = installed.firstOrNull { it.id == id } ?: return
+        if (desktopBusy != null || installingId != null) return
+        val password = DesktopInstaller.randomPassword()
+        val script = DesktopInstaller.script(m.id, password)
+        if (script == null) {
+            notice = "NO VERIFIED DESKTOP RECIPE FOR ${m.name}"
+            return
+        }
+        desktopBusy = "INSTALLING DESKTOP"
+        desktopStatus = emptyList()
+        desktopJob = viewModelScope.launch {
+            try {
+                val free = LinuxBootStorage.freeBytes(File(m.rootfsPath))
+                if (free < DesktopInstaller.REQUIRED_FREE) {
+                    log("NOT ENOUGH SPACE: need ${formatBytes(DesktopInstaller.REQUIRED_FREE)}, have ${formatBytes(free)}")
+                    return@launch
+                }
+                val code = proot.runStreaming(File(m.rootfsPath), script, 40) { line -> log(line) }
+                val ok = code == 0 && desktopStatus.any { it.contains("DESKTOP_INSTALL_OK") }
+                if (ok) {
+                    withContext(Dispatchers.IO) { store.save(m.copy(desktop = "xfce", vncPassword = password)) }
+                    log("DESKTOP INSTALLED")
+                } else {
+                    log("DESKTOP INSTALL FAILED (exit code $code)")
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("FAILED: ${e.message}")
+            } finally {
+                desktopBusy = null
+                withContext(NonCancellable) { refresh() }
+            }
+        }
+    }
+
+    private fun autoGeometry(): Pair<Int, Int> {
+        val dm = getApplication<Application>().resources.displayMetrics
+        val long = max(dm.widthPixels, dm.heightPixels)
+        val short = min(dm.widthPixels, dm.heightPixels)
+        val w = min(1280, long) and 1.inv()
+        val h = (w * short / long) and 1.inv()
+        return w to h
+    }
+
+    /** Starts the desktop (if needed), connects the embedded viewer and opens it. */
+    fun bootDesktop(id: String, width: Int = 0, height: Int = 0) {
+        val m = installed.firstOrNull { it.id == id } ?: return
+        val password = m.vncPassword
+        if (m.desktop == null || password == null) {
+            notice = "NO DESKTOP INSTALLED"
+            return
+        }
+        if (desktopBusy != null) return
+        val (w, h) = if (width > 0 && height > 0) width to height else autoGeometry()
+        desktopBusy = "STARTING DESKTOP"
+        desktopStatus = emptyList()
+        desktopJob = viewModelScope.launch {
+            try {
+                if (!session.running) {
+                    session.start(File(m.rootfsPath), w, h) { line -> log(line) }.getOrThrow()
+                    sessionRunning = true
+                }
+                val c = RfbClient("127.0.0.1", DesktopSession.PORT, password)
+                withContext(Dispatchers.IO) { c.connect() }
+                val ctl = ViewerController(c)
+                c.start(ctl)
+                client = c
+                viewer = ctl
+                viewerId = id
+                screen = Screen.Viewer
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("BOOT FAILED: ${e.message}")
+                session.stop()
+                sessionRunning = false
+            } finally {
+                desktopBusy = null
+            }
+        }
+    }
+
+    fun exitViewer(stop: Boolean) {
+        client?.close()
+        client = null
+        viewer = null
+        if (stop) {
+            viewModelScope.launch {
+                withContext(Dispatchers.IO) { session.stop() }
+                sessionRunning = false
+            }
+        }
+        screen = viewerId?.let { Screen.DistroDetail(it) } ?: Screen.BootManager
+    }
+
+    fun reconnect() {
+        val id = viewerId ?: return
+        exitViewer(false)
+        bootDesktop(id)
+    }
+
+    /** Resolution changes restart the desktop session with the new framebuffer size. */
+    fun restartDesktop(width: Int, height: Int) {
+        val id = viewerId ?: return
+        client?.close()
+        client = null
+        viewer = null
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { session.stop() }
+            sessionRunning = false
+            bootDesktop(id, width, height)
+        }
+    }
+
+    fun stopDesktop() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { session.stop() }
+            sessionRunning = false
+        }
+    }
+
+    override fun onCleared() {
+        client?.close()
+        session.stop()
+    }
+
+    // ---- storage --------------------------------------------------------------------------
+
     fun remove(id: String) {
-        if (installingId == id) {
-            notice = "CANNOT REMOVE WHILE INSTALLING"
+        if (installingId == id || sessionRunning) {
+            notice = "STOP THE DESKTOP / INSTALL FIRST"
             return
         }
         viewModelScope.launch {
