@@ -25,7 +25,8 @@ class DesktopSession(private val proot: ProotRuntime) {
         "chmod 700 /tmp/runtime-root",
         "chmod 1777 /tmp/.X11-unix",
         "rm -f /tmp/.X1-lock /tmp/.X11-unix/X1",
-        "Xvnc :1 -geometry ${width}x$height -depth 24 -rfbport $PORT -rfbauth /root/.vnc/passwd " +
+        "XVNC=Xvnc; command -v Xvnc >/dev/null 2>&1 || XVNC=Xtigervnc",
+        "\$XVNC :1 -geometry ${width}x$height -depth 24 -rfbport $PORT -rfbauth /root/.vnc/passwd " +
             "-localhost -SecurityTypes VncAuth -AlwaysShared -desktop LinuxBoot &",
         "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do [ -e /tmp/.X11-unix/X1 ] && break; sleep 1; done",
         "exec dbus-run-session -- startxfce4",
