@@ -82,8 +82,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
-      - name: Build debug APK (compiles the Rust library via cargo-ndk)
-        run: gradle assembleDebug --no-daemon
+      - name: Unit tests and debug APK (compiles the Rust library via cargo-ndk)
+        run: gradle testDebugUnitTest assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: linuxboot-debug-apk
