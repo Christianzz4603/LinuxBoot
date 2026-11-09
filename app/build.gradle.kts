@@ -25,6 +25,12 @@ android {
         }
     }
 
+    // PRoot ships as libproot.so / libproot-loader.so and must exist as real files in
+    // nativeLibraryDir to be executable, so native libs have to be extracted at install.
+    packaging {
+        jniLibs { useLegacyPackaging = true }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
