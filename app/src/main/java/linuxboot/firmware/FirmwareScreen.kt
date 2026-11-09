@@ -349,11 +349,11 @@ private fun Line(text: String, color: Color = Fg, bold: Boolean = false) {
 }
 
 @Composable
-fun FirmwareApp(initialInfo: SystemInfo, onShutdown: () -> Unit) {
+fun FirmwareApp(@Suppress("UNUSED_PARAMETER") initialInfo: SystemInfo, onShutdown: () -> Unit) {
     val vm: FirmwareViewModel = viewModel()
     val context = LocalContext.current
     // Re-read real RAM/storage figures each time the screen changes instead of showing launch-time values.
-    val info = remember(vm.screen) { if (vm.screen == Screen.Home && false) initialInfo else SystemInfo.detect(context) }
+    val info = remember(vm.screen) { SystemInfo.detect(context) }
     if (vm.screen == Screen.Viewer) {
         ViewerScreen(vm)
         return
