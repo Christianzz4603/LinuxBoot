@@ -33,9 +33,8 @@ data class InstallStatus(
 /**
  * Download, verify, extract and configure one distribution.
  *
- * Not done yet (needs the PRoot binary): initializing the environment under PRoot,
- * creating a Linux user, and installing packages or a desktop. The distribution is
- * therefore registered as INSTALLED (rootfs ready), not bootable.
+ * Not done yet: creating a Linux user, and installing packages or a desktop inside
+ * the rootfs under PRoot. The distribution is registered as INSTALLED (rootfs ready).
  */
 class Installer(private val storage: LinuxBootStorage, private val store: DistroStore) {
 
@@ -135,12 +134,7 @@ class Installer(private val storage: LinuxBootStorage, private val store: Distro
 
                 store.save(meta.copy(state = DistroState.EXTRACTED))
                 archive.delete()
-                say(
-                    InstallStatus(
-                        Phase.DONE,
-                        "${entry.name} ${src.version} installed. Not bootable yet: the PRoot runtime is not bundled.",
-                    ),
-                )
+                say(InstallStatus(Phase.DONE, "${entry.name} ${src.version} installed. Rootfs ready."))
                 Result.success(Unit)
             } catch (e: CancellationException) {
                 rootfsToClean?.let { runCatching { Fs.deleteTree(it) } }
