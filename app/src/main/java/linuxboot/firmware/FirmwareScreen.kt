@@ -39,8 +39,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import linuxboot.distro.Catalog
-import linuxboot.distro.DownloadProgress
 import linuxboot.distro.DistroState
+import linuxboot.distro.DownloadProgress
 import linuxboot.distro.Phase
 import linuxboot.runtime.NativeRuntime
 import linuxboot.storage.LinuxBootStorage
@@ -84,14 +84,20 @@ private fun progressLine(p: DownloadProgress): String {
     return "${formatBytes(p.downloaded)} / $tot$pct  ${formatBytes(p.bytesPerSec)}/s"
 }
 
-private fun systemLines(i: SystemInfo): List<String> {
+private fun runtimeText(vm: FirmwareViewModel) = when {
+    !NativeRuntime.available -> "NOT INSTALLED (Rust library missing)"
+    vm.proot.available -> "READY (RUST + PROOT)"
+    else -> "RUST READY, PROOT MISSING"
+}
+
+private fun systemLines(i: SystemInfo, vm: FirmwareViewModel): List<String> {
     val l = mutableListOf(
         "# SYSTEM INFORMATION",
         "CPU: " + (if (i.isArm64) "ARM64" else i.abis.firstOrNull() ?: "UNKNOWN"),
         "ARCHITECTURE: " + i.arch.uppercase(),
         "MEMORY: ${formatBytes(i.totalMemBytes)} (${formatBytes(i.availMemBytes)} FREE)",
         "STORAGE: ${formatBytes(i.storageFreeBytes)} FREE OF ${formatBytes(i.storageTotalBytes)}",
-        "RUNTIME: " + if (NativeRuntime.available) "RUST READY, PROOT NOT BUNDLED" else "NOT INSTALLED",
+        "RUNTIME: ${runtimeText(vm)}",
     )
     if (!i.isArm64) l += "WARNING: NO ARM64 ABI. NATIVE LINUX UNSUPPORTED."
     return l
@@ -113,7 +119,7 @@ private fun hardwareLines(i: SystemInfo, vm: FirmwareViewModel) = listOf(
 private fun model(vm: FirmwareViewModel, info: SystemInfo, onShutdown: () -> Unit): Model =
     when (val s = vm.screen) {
         Screen.Home -> Model(
-            "", systemLines(info), "BOOT OPTIONS",
+            "", systemLines(info, vm), "BOOT OPTIONS",
             listOf(
                 MenuItem("Boot Operating System") { vm.open(Screen.Boot) },
                 MenuItem("Install Operating System") { vm.open(Screen.InstallList) },
@@ -129,14 +135,22 @@ private fun model(vm: FirmwareViewModel, info: SystemInfo, onShutdown: () -> Uni
             val ready = vm.installed.filter { it.state == DistroState.EXTRACTED }
             Model(
                 "BOOT OPERATING SYSTEM",
-                if (ready.isEmpty()) listOf(
-                    "NO BOOTABLE DISTRIBUTION FOUND", "",
-                    "Use Install Operating System to download one.",
-                ) else listOf(
-                    "ROOTFS READY: " + ready.joinToString { it.name }, "",
-                    "BOOT UNAVAILABLE: the PRoot runtime is not bundled in this build.",
-                    "Nothing is launched or simulated.",
-                ),
+                when {
+                    ready.isEmpty() -> listOf(
+                        "NO BOOTABLE DISTRIBUTION FOUND", "",
+                        "Use Install Operating System to download one.",
+                    )
+                    !vm.proot.available -> listOf(
+                        "ROOTFS READY: " + ready.joinToString { it.name }, "",
+                        "PROOT UNAVAILABLE: ${vm.proot.problem}",
+                    )
+                    else -> listOf(
+                        "ROOTFS READY: " + ready.joinToString { it.name }, "",
+                        "DESKTOP BOOT IS NOT IMPLEMENTED YET.",
+                        "You can run a real command in the distribution from",
+                        "Boot Manager > distribution > Run shell test.",
+                    )
+                },
             )
         }
         Screen.InstallList -> Model(
@@ -170,27 +184,35 @@ private fun model(vm: FirmwareViewModel, info: SystemInfo, onShutdown: () -> Uni
         )
         is Screen.DistroDetail -> {
             val m = vm.installed.firstOrNull { it.id == s.id }
-            if (m == null) Model("DISTRIBUTION", listOf("NOT FOUND")) else Model(
-                m.name.uppercase(),
-                listOfNotNull(
-                    "VERSION: ${m.version}",
-                    "STATE: ${m.state.label}",
-                    m.message?.let { "LAST ERROR: $it" },
-                    "LOCATION: ${locText(m.location)}",
-                    "ROOTFS: ${m.rootfsPath}",
-                    "DISK USAGE: ${formatBytes(vm.usage[m.id] ?: 0L)}",
-                    "SOURCE: ${m.sourceUrl}",
-                    "SHA-256: ${m.sha256}",
-                    "",
-                    "BOOT: UNAVAILABLE (PRoot runtime not bundled in this build)",
-                ),
-                "ACTIONS",
-                listOf(
-                    MenuItem("Remove distribution", vm.installingId != m.id) {
-                        vm.open(Screen.ConfirmRemove(m.id))
-                    },
-                ),
-            )
+            if (m == null) Model("DISTRIBUTION", listOf("NOT FOUND")) else {
+                val shell = vm.shellText?.let { listOf("", "# SHELL TEST") + it.lines().take(40) } ?: emptyList()
+                Model(
+                    m.name.uppercase(),
+                    listOfNotNull(
+                        "VERSION: ${m.version}",
+                        "STATE: ${m.state.label}",
+                        m.message?.let { "LAST ERROR: $it" },
+                        "LOCATION: ${locText(m.location)}",
+                        "ROOTFS: ${m.rootfsPath}",
+                        "DISK USAGE: ${formatBytes(vm.usage[m.id] ?: 0L)}",
+                        "SOURCE: ${m.sourceUrl}",
+                        "SHA-256: ${m.sha256}",
+                        "",
+                        "DESKTOP BOOT: NOT IMPLEMENTED YET",
+                        if (!vm.proot.available) "PROOT: ${vm.proot.problem}" else null,
+                    ) + shell,
+                    "ACTIONS",
+                    listOf(
+                        MenuItem(
+                            "Run shell test (PRoot)",
+                            m.state == DistroState.EXTRACTED && vm.proot.available && !vm.shellRunning,
+                        ) { vm.runShellTest(m.id) },
+                        MenuItem("Remove distribution", vm.installingId != m.id) {
+                            vm.open(Screen.ConfirmRemove(m.id))
+                        },
+                    ),
+                )
+            }
         }
         is Screen.ConfirmRemove -> {
             val m = vm.installed.firstOrNull { it.id == s.id }
@@ -225,7 +247,7 @@ private fun model(vm: FirmwareViewModel, info: SystemInfo, onShutdown: () -> Uni
             l += ""
             l += "# RUNTIME"
             l += "RUST LIBRARY: " + if (NativeRuntime.available) "LOADED" else "MISSING (${NativeRuntime.unavailableReason})"
-            l += "PROOT: NOT BUNDLED"
+            l += "PROOT: " + (vm.proot.problem?.let { "MISSING - $it" } ?: "PRESENT")
             l += ""
             l += "# PERMISSIONS"
             l += "INTERNET (HTTPS rootfs downloads only)"
@@ -234,7 +256,7 @@ private fun model(vm: FirmwareViewModel, info: SystemInfo, onShutdown: () -> Uni
         Screen.Recovery -> Model(
             "RECOVERY ENVIRONMENT",
             listOfNotNull(
-                "LINUX RECOVERY SHELL: UNAVAILABLE (needs the PRoot runtime)",
+                "RECOVERY SHELL: not implemented yet",
                 "",
                 "PARTIAL DOWNLOADS AND CACHE: ${formatBytes(vm.cacheBytes)}",
                 vm.notice,
