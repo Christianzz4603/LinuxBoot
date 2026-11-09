@@ -17,7 +17,8 @@ jobs:
   # Builds a static aarch64 PRoot (talloc linked in, unbundled loader) from source with
   # the NDK version the upstream recipe was written for. The recipe repo is pinned to a
   # signed commit; PRoot itself is fetched by upstream's get-proot.sh at tag v0.15_release.
-  # talloc 2.1.14 bundles a Python 2 waf, so the build runs in an Ubuntu 20.04 container.
+  # talloc 2.1.14 bundles a Python 2 waf, and PRoot's loader step needs gawk's strtonum,
+  # so the build runs in an Ubuntu 20.04 container with python2 and gawk.
   proot:
     runs-on: ubuntu-latest
     steps:
@@ -38,7 +39,7 @@ jobs:
             -v "$PWD":/work -v "$NDK":"$NDK":ro -w /work ubuntu:20.04 bash -ec '
               export DEBIAN_FRONTEND=noninteractive
               apt-get update
-              apt-get install -y --no-install-recommends python2 build-essential wget ca-certificates
+              apt-get install -y --no-install-recommends python2 gawk build-essential wget ca-certificates
               ln -sf /usr/bin/python2 /usr/local/bin/python
               ./get-talloc.sh
               ./get-proot.sh
