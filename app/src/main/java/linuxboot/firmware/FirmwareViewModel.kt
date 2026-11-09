@@ -19,9 +19,11 @@ import linuxboot.distro.InstallStatus
 import linuxboot.distro.Installer
 import linuxboot.distro.Phase
 import linuxboot.distro.ResolvedSource
+import linuxboot.runtime.ProotRuntime
 import linuxboot.storage.Fs
 import linuxboot.storage.LinuxBootStorage
 import linuxboot.storage.StorageDecision
+import java.io.File
 
 sealed interface Screen {
     data object Home : Screen
@@ -45,6 +47,7 @@ sealed interface SourceState {
 
 class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
     val storage = LinuxBootStorage(app)
+    val proot = ProotRuntime(app)
     private val store = DistroStore(storage)
     private val installer = Installer(storage, store)
     private var job: Job? = null
@@ -66,6 +69,10 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
     var decision by mutableStateOf<StorageDecision?>(null)
         private set
     var notice by mutableStateOf<String?>(null)
+        private set
+    var shellText by mutableStateOf<String?>(null)
+        private set
+    var shellRunning by mutableStateOf(false)
         private set
 
     init {
@@ -92,6 +99,7 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
                 loadDecision()
                 resolveSource(s.id)
             }
+            is Screen.DistroDetail -> shellText = null
             Screen.Config -> loadDecision()
             Screen.Boot, Screen.BootManager, Screen.Recovery, Screen.InstallList ->
                 viewModelScope.launch { refresh() }
@@ -150,6 +158,35 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
     fun cancelInstall() {
         job?.cancel()
         status = InstallStatus(Phase.CANCELLED, "Cancelled. Install again to resume the download.")
+    }
+
+    /** Runs a few real commands inside the distribution under PRoot and shows the raw output. */
+    fun runShellTest(id: String) {
+        val m = installed.firstOrNull { it.id == id } ?: return
+        if (shellRunning) return
+        shellRunning = true
+        shellText = "RUNNING..."
+        viewModelScope.launch {
+            shellText = try {
+                val r = proot.runShell(File(m.rootfsPath), "uname -a; echo; cat /etc/os-release; echo; id")
+                buildString {
+                    appendLine("EXIT CODE: ${r.exitCode}" + if (r.timedOut) " (TIMED OUT)" else "")
+                    if (r.stdout.isNotBlank()) {
+                        appendLine("--- STDOUT ---")
+                        appendLine(r.stdout.trimEnd())
+                    }
+                    if (r.stderr.isNotBlank()) {
+                        appendLine("--- STDERR ---")
+                        appendLine(r.stderr.trimEnd())
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                "FAILED TO START: ${e.message}"
+            }
+            shellRunning = false
+        }
     }
 
     fun remove(id: String) {
