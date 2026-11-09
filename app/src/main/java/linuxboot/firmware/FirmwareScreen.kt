@@ -38,7 +38,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import linuxboot.desktop.ViewerScreen
 import linuxboot.distro.Catalog
+import linuxboot.distro.DesktopInstaller
 import linuxboot.distro.DistroState
 import linuxboot.distro.DownloadProgress
 import linuxboot.distro.Phase
@@ -130,26 +132,23 @@ private fun model(vm: FirmwareViewModel, info: SystemInfo, onShutdown: () -> Uni
                 MenuItem("Shutdown Application") { onShutdown() },
             ),
         )
+        Screen.Viewer -> Model("", emptyList())
         Screen.Hardware -> Model("HARDWARE INFORMATION", hardwareLines(info, vm))
         Screen.Boot -> {
             val ready = vm.installed.filter { it.state == DistroState.EXTRACTED }
+            val bootable = ready.filter { it.desktop != null }
             Model(
                 "BOOT OPERATING SYSTEM",
-                when {
-                    ready.isEmpty() -> listOf(
-                        "NO BOOTABLE DISTRIBUTION FOUND", "",
-                        "Use Install Operating System to download one.",
-                    )
-                    !vm.proot.available -> listOf(
-                        "ROOTFS READY: " + ready.joinToString { it.name }, "",
-                        "PROOT UNAVAILABLE: ${vm.proot.problem}",
-                    )
-                    else -> listOf(
-                        "ROOTFS READY: " + ready.joinToString { it.name }, "",
-                        "DESKTOP BOOT IS NOT IMPLEMENTED YET.",
-                        "You can run a real command in the distribution from",
-                        "Boot Manager > distribution > Run shell test.",
-                    )
+                listOfNotNull(
+                    if (ready.isEmpty()) "NO BOOTABLE DISTRIBUTION FOUND. Use Install Operating System." else null,
+                    if (ready.isNotEmpty() && bootable.isEmpty()) "No desktop installed yet. Open Boot Manager > distribution > Install desktop." else null,
+                    if (!vm.proot.available) "PROOT UNAVAILABLE: ${vm.proot.problem}" else null,
+                    vm.desktopBusy?.let { "$it..." },
+                    vm.notice,
+                ) + vm.desktopStatus.takeLast(12),
+                if (bootable.isEmpty()) null else "BOOT",
+                bootable.map { m ->
+                    MenuItem("Boot ${m.name}", vm.proot.available && vm.desktopBusy == null) { vm.bootDesktop(m.id) }
                 },
             )
         }
@@ -186,6 +185,10 @@ private fun model(vm: FirmwareViewModel, info: SystemInfo, onShutdown: () -> Uni
             val m = vm.installed.firstOrNull { it.id == s.id }
             if (m == null) Model("DISTRIBUTION", listOf("NOT FOUND")) else {
                 val shell = vm.shellText?.let { listOf("", "# SHELL TEST") + it.lines().take(40) } ?: emptyList()
+                val desk = if (vm.desktopStatus.isEmpty()) emptyList() else listOf("", "# DESKTOP LOG") + vm.desktopStatus.takeLast(15)
+                val ready = m.state == DistroState.EXTRACTED && vm.proot.available
+                val idle = vm.desktopBusy == null
+                val hasDesktop = m.desktop != null
                 Model(
                     m.name.uppercase(),
                     listOfNotNull(
@@ -198,16 +201,25 @@ private fun model(vm: FirmwareViewModel, info: SystemInfo, onShutdown: () -> Uni
                         "SOURCE: ${m.sourceUrl}",
                         "SHA-256: ${m.sha256}",
                         "",
-                        "DESKTOP BOOT: NOT IMPLEMENTED YET",
+                        "DESKTOP: " + when {
+                            hasDesktop -> "XFCE INSTALLED"
+                            DesktopInstaller.supports(m.id) -> "NOT INSTALLED"
+                            else -> "NO VERIFIED RECIPE FOR THIS DISTRIBUTION YET"
+                        },
+                        "SESSION: " + if (vm.sessionRunning) "RUNNING" else "STOPPED",
+                        vm.desktopBusy?.let { "$it..." },
                         if (!vm.proot.available) "PROOT: ${vm.proot.problem}" else null,
-                    ) + shell,
+                    ) + shell + desk,
                     "ACTIONS",
                     listOf(
+                        MenuItem("Start desktop", ready && idle && hasDesktop) { vm.bootDesktop(m.id) },
+                        MenuItem("Stop desktop", vm.sessionRunning && idle) { vm.stopDesktop() },
                         MenuItem(
-                            "Run shell test (PRoot)",
-                            m.state == DistroState.EXTRACTED && vm.proot.available && !vm.shellRunning,
-                        ) { vm.runShellTest(m.id) },
-                        MenuItem("Remove distribution", vm.installingId != m.id) {
+                            "Install desktop (XFCE, ~1 GB)",
+                            ready && idle && !hasDesktop && DesktopInstaller.supports(m.id),
+                        ) { vm.installDesktop(m.id) },
+                        MenuItem("Run shell test (PRoot)", ready && !vm.shellRunning) { vm.runShellTest(m.id) },
+                        MenuItem("Remove distribution", vm.installingId != m.id && !vm.sessionRunning) {
                             vm.open(Screen.ConfirmRemove(m.id))
                         },
                     ),
@@ -338,6 +350,10 @@ private fun Line(text: String, color: Color = Fg, bold: Boolean = false) {
 @Composable
 fun FirmwareApp(info: SystemInfo, onShutdown: () -> Unit) {
     val vm: FirmwareViewModel = viewModel()
+    if (vm.screen == Screen.Viewer) {
+        ViewerScreen(vm)
+        return
+    }
     var selected by remember { mutableIntStateOf(0) }
     var help by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
