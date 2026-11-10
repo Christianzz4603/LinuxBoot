@@ -42,7 +42,7 @@ class ProotRuntime(context: Context) {
         check(available) { problem ?: "PRoot unavailable" }
         tmpDir.mkdirs()
         val cmd = listOf(
-            proot.path, "--link2symlink", "-0", "-r", rootfs.path,
+            proot.path, "--link2symlink", "--kill-on-exit", "-0", "-r", rootfs.path,
             "-b", "/dev", "-b", "/proc", "-b", "/sys",
             "-w", "/root", "/bin/sh", "-c", script,
         )
