@@ -23,6 +23,7 @@ import linuxboot.distro.InstallStatus
 import linuxboot.distro.Installer
 import linuxboot.distro.Phase
 import linuxboot.distro.ResolvedSource
+import linuxboot.runtime.NativeRuntime
 import linuxboot.runtime.ProotRuntime
 import linuxboot.storage.Fs
 import linuxboot.storage.LinuxBootStorage
@@ -30,6 +31,10 @@ import linuxboot.storage.StorageDecision
 import linuxboot.system.SystemInfo
 import linuxboot.system.formatBytes
 import java.io.File
+import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 
@@ -48,6 +53,7 @@ sealed interface Screen {
     data class InstallDetail(val id: String) : Screen
     data class DistroDetail(val id: String) : Screen
     data class ConfirmRemove(val id: String) : Screen
+    data class ConfirmRestore(val id: String) : Screen
 }
 
 sealed interface SourceState {
@@ -98,6 +104,10 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var sessionRunning by mutableStateOf(false)
         private set
+    var backups by mutableStateOf<Map<String, List<File>>>(emptyMap())
+        private set
+    var opBusy by mutableStateOf<String?>(null)
+        private set
 
     init {
         viewModelScope.launch { refresh() }
@@ -109,9 +119,16 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
         val cache = withContext(Dispatchers.IO) {
             Fs.treeSize(storage.downloads) + Fs.treeSize(storage.cache)
         }
+        val bk = withContext(Dispatchers.IO) {
+            list.associate { m ->
+                m.id to (storage.backups.listFiles { f -> f.name.startsWith(m.id + "-") && f.name.endsWith(".tar.xz") }
+                    ?.sortedByDescending { it.name } ?: emptyList())
+            }
+        }
         installed = list
         usage = sizes
         cacheBytes = cache
+        backups = bk
     }
 
     fun open(s: Screen) {
@@ -137,6 +154,7 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
             is Screen.InstallDetail -> Screen.InstallList
             is Screen.DistroDetail -> Screen.BootManager
             is Screen.ConfirmRemove -> Screen.DistroDetail(s.id)
+            is Screen.ConfirmRestore -> Screen.DistroDetail(s.id)
             else -> Screen.Home
         }
     }
@@ -351,6 +369,99 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Archives the rootfs into LinuxBoot/backups. A blocking native call: no progress and no cancel. */
+    fun backupDistro(id: String) {
+        val m = installed.firstOrNull { it.id == id } ?: return
+        if (opBusy != null || desktopBusy != null || installingId != null || sessionRunning) {
+            notice = "STOP THE DESKTOP AND FINISH OTHER OPERATIONS FIRST"
+            return
+        }
+        opBusy = "BACKING UP"
+        notice = null
+        viewModelScope.launch {
+            try {
+                storage.ensureLayout()
+                val need = (usage[id] ?: 0L) / 2 + 32L * 1024 * 1024
+                val free = LinuxBootStorage.freeBytes(storage.backups)
+                if (free < need) {
+                    notice = "NOT ENOUGH SPACE FOR A BACKUP (estimate): need about ${formatBytes(need)}, have ${formatBytes(free)}"
+                    return@launch
+                }
+                val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+                val out = File(storage.backups, "$id-$stamp.tar.xz")
+                val r = withContext(Dispatchers.IO) { NativeRuntime.backup(File(m.rootfsPath), out) }
+                notice = r.fold(
+                    { "BACKUP OK: ${out.name} (${formatBytes(out.length())}), ${it.files} files, ${it.symlinks} symlinks, ${it.skipped} special files skipped" },
+                    { "BACKUP FAILED: ${it.message}" },
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                notice = "BACKUP FAILED: ${e.message}"
+            } finally {
+                opBusy = null
+                withContext(NonCancellable) { refresh() }
+            }
+        }
+    }
+
+    /** Restores the newest backup into a staging directory and swaps it in only if extraction succeeds. */
+    fun restoreDistro(id: String) {
+        val m = installed.firstOrNull { it.id == id } ?: return
+        screen = Screen.DistroDetail(id)
+        val backup = backups[id]?.firstOrNull()
+        if (backup == null) {
+            notice = "NO BACKUP FOUND"
+            return
+        }
+        if (opBusy != null || desktopBusy != null || installingId != null || sessionRunning) {
+            notice = "STOP THE DESKTOP AND FINISH OTHER OPERATIONS FIRST"
+            return
+        }
+        opBusy = "RESTORING"
+        notice = null
+        viewModelScope.launch {
+            try {
+                val rootfs = File(m.rootfsPath)
+                val base = rootfs.parentFile ?: throw IOException("Bad rootfs path")
+                check(storage.owns(base)) { "Refusing to touch ${base.path}" }
+                val need = backup.length() * 5
+                val free = LinuxBootStorage.freeBytes(base)
+                if (free < need) {
+                    notice = "NOT ENOUGH SPACE TO RESTORE (estimate): need about ${formatBytes(need)}, have ${formatBytes(free)}"
+                    return@launch
+                }
+                notice = withContext(Dispatchers.IO) {
+                    val staging = File(base, "rootfs.restoring")
+                    val old = File(base, "rootfs.old")
+                    Fs.deleteTree(staging)
+                    Fs.deleteTree(old)
+                    staging.mkdirs()
+                    try {
+                        NativeRuntime.extract(backup, staging).getOrThrow()
+                        if (!rootfs.renameTo(old)) throw IOException("Could not set the current rootfs aside")
+                        if (!staging.renameTo(rootfs)) {
+                            old.renameTo(rootfs)
+                            throw IOException("Could not move the restored rootfs into place")
+                        }
+                        Fs.deleteTree(old)
+                        "RESTORED FROM ${backup.name}"
+                    } catch (e: Exception) {
+                        Fs.deleteTree(staging)
+                        "RESTORE FAILED (current rootfs kept): ${e.message}"
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                notice = "RESTORE FAILED: ${e.message}"
+            } finally {
+                opBusy = null
+                withContext(NonCancellable) { refresh() }
+            }
+        }
+    }
+
     override fun onCleared() {
         client?.close()
         session.stop()
@@ -359,7 +470,7 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
     // ---- storage --------------------------------------------------------------------------
 
     fun remove(id: String) {
-        if (installingId == id || sessionRunning) {
+        if (installingId == id || sessionRunning || opBusy != null) {
             notice = "STOP THE DESKTOP / INSTALL FIRST"
             return
         }
