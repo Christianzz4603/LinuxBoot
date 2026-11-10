@@ -9,6 +9,7 @@ data class ExtractReport(
     val symlinks: Long,
     val hardlinks: Long,
     val skipped: Long,
+    val hardlinkCopies: Long = 0,
 )
 
 /** Kotlin side of the Rust runtime. Reports a missing library instead of crashing. */
@@ -34,7 +35,7 @@ object NativeRuntime {
         val r = nativeBackup(root.path, out.path)
         if (!r.startsWith("OK:")) return Result.failure(IOException(r.removePrefix("ERR:")))
         val n = r.removePrefix("OK:").split(",").map { it.toLong() }
-        return Result.success(ExtractReport(n[0], n[1], n[2], n[3], n[4]))
+        return Result.success(ExtractReport(n[0], n[1], n[2], n[3], n[4], n.getOrElse(5) { 0L }))
     }
 
     fun verifySha256(file: File, expected: String): Result<Unit> {
@@ -48,6 +49,6 @@ object NativeRuntime {
         val r = nativeExtract(archive.path, root.path)
         if (!r.startsWith("OK:")) return Result.failure(IOException(r.removePrefix("ERR:")))
         val n = r.removePrefix("OK:").split(",").map { it.toLong() }
-        return Result.success(ExtractReport(n[0], n[1], n[2], n[3], n[4]))
+        return Result.success(ExtractReport(n[0], n[1], n[2], n[3], n[4], n.getOrElse(5) { 0L }))
     }
 }
