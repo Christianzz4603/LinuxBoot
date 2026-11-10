@@ -14,6 +14,8 @@ pub struct Report {
     pub symlinks: u64,
     pub hardlinks: u64,
     pub skipped: u64,
+    /// Hard links Android refused (SELinux forbids them in app storage), stored as copies instead.
+    pub hardlink_copies: u64,
 }
 
 fn bad(msg: String) -> io::Error {
@@ -58,7 +60,7 @@ fn reject_symlink_ancestors(root: &Path, dest: &Path) -> io::Result<()> {
 }
 
 fn set_mode(path: &Path, mode: u32, floor: u32) -> io::Result<()> {
-    fs::set_permissions(path, fs::Permissions::from_mode((mode & 0o7777) | floor))
+    fs::set_permissions(path, fs::Permissions::from_mode((mode & 0o1777) | floor))
 }
 
 fn prepare(dest: &Path) -> io::Result<()> {
@@ -73,10 +75,37 @@ fn prepare(dest: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn ctx_err(e: io::Error, what: &str, path: &Path) -> io::Error {
+    io::Error::new(e.kind(), format!("{} {}: {}", what, path.display(), e))
+}
+
+/// Adds the operation and path to an error, so a failure on a device says exactly what broke.
+fn ctx<T>(r: io::Result<T>, what: &str, path: &Path) -> io::Result<T> {
+    r.map_err(|e| ctx_err(e, what, path))
+}
+
+enum LinkKind {
+    Linked,
+    Copied,
+}
+
+/// Android's SELinux policy forbids hard links in app storage. When linking fails, keep the
+/// content as a copy (same bytes and mode) rather than failing the whole install. The caller
+/// counts copies, so this is reported, not hidden.
+fn link_or_copy<F: Fn(&Path, &Path) -> io::Result<()>>(src: &Path, dest: &Path, link: F) -> io::Result<LinkKind> {
+    match link(src, dest) {
+        Ok(()) => Ok(LinkKind::Linked),
+        Err(_) => {
+            fs::copy(src, dest)?;
+            Ok(LinkKind::Copied)
+        }
+    }
+}
+
 /// Extracts an uncompressed tar stream into `root` with path validation.
 /// Any unsafe entry aborts extraction with an error.
 pub fn extract<R: Read>(reader: R, root: &Path) -> io::Result<Report> {
-    fs::create_dir_all(root)?;
+    ctx(fs::create_dir_all(root), "create", root)?;
     let mut archive = Archive::new(reader);
     let mut rep = Report::default();
 
@@ -92,16 +121,16 @@ pub fn extract<R: Read>(reader: R, root: &Path) -> io::Result<Report> {
         let mode = entry.header().mode().unwrap_or(0o644);
         match entry.header().entry_type() {
             EntryType::Directory => {
-                fs::create_dir_all(&dest)?;
-                set_mode(&dest, mode, 0o700)?;
+                ctx(fs::create_dir_all(&dest), "mkdir", &dest)?;
+                ctx(set_mode(&dest, mode, 0o700), "chmod", &dest)?;
                 rep.dirs += 1;
             }
             EntryType::Regular | EntryType::Continuous => {
-                prepare(&dest)?;
-                let mut f = fs::File::create(&dest)?;
-                io::copy(&mut entry, &mut f)?;
+                ctx(prepare(&dest), "prepare", &dest)?;
+                let mut f = ctx(fs::File::create(&dest), "create", &dest)?;
+                ctx(io::copy(&mut entry, &mut f), "write", &dest)?;
                 drop(f);
-                set_mode(&dest, mode, 0o600)?;
+                ctx(set_mode(&dest, mode, 0o600), "chmod", &dest)?;
                 rep.files += 1;
             }
             EntryType::Symlink => {
@@ -109,8 +138,8 @@ pub fn extract<R: Read>(reader: R, root: &Path) -> io::Result<Report> {
                     .link_name()?
                     .ok_or_else(|| bad(format!("symlink without target: {}", rel.display())))?
                     .into_owned();
-                prepare(&dest)?;
-                symlink(&target, &dest)?;
+                ctx(prepare(&dest), "prepare", &dest)?;
+                ctx(symlink(&target, &dest), "symlink", &dest)?;
                 rep.symlinks += 1;
             }
             EntryType::Link => {
@@ -120,9 +149,15 @@ pub fn extract<R: Read>(reader: R, root: &Path) -> io::Result<Report> {
                     .into_owned();
                 let src = safe_join(root, &target)?;
                 reject_symlink_ancestors(root, &src)?;
-                prepare(&dest)?;
-                fs::hard_link(&src, &dest)?;
-                rep.hardlinks += 1;
+                ctx(prepare(&dest), "prepare", &dest)?;
+                match link_or_copy(&src, &dest, |a, b| fs::hard_link(a, b)) {
+                    Ok(LinkKind::Linked) => rep.hardlinks += 1,
+                    Ok(LinkKind::Copied) => {
+                        rep.hardlinks += 1;
+                        rep.hardlink_copies += 1;
+                    }
+                    Err(e) => return Err(ctx_err(e, "hardlink", &dest)),
+                }
             }
             _ => rep.skipped += 1,
         }
@@ -200,6 +235,52 @@ mod tests {
         raw(&mut b, "/tmp/linuxboot_abs_test", b"x", EntryType::Regular, None);
         let err = extract(Cursor::new(b.into_inner().unwrap()), &root).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn hardlink_falls_back_to_copy_when_linking_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("a");
+        let dst = tmp.path().join("b");
+        fs::write(&src, b"data").unwrap();
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o755)).unwrap();
+        let kind = link_or_copy(&src, &dst, |_, _| Err(io::Error::from(io::ErrorKind::PermissionDenied))).unwrap();
+        assert!(matches!(kind, LinkKind::Copied));
+        assert_eq!(fs::read(&dst).unwrap(), b"data");
+        assert_eq!(fs::metadata(&dst).unwrap().permissions().mode() & 0o777, 0o755);
+    }
+
+    #[test]
+    fn real_hardlinks_still_link_and_are_counted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        let mut b = Builder::new(Vec::new());
+        raw(&mut b, "a", b"x", EntryType::Regular, None);
+        raw(&mut b, "b", b"", EntryType::Link, Some("a"));
+        let rep = extract(Cursor::new(b.into_inner().unwrap()), &root).unwrap();
+        assert_eq!(rep.hardlinks, 1);
+        assert_eq!(fs::read(root.join("b")).unwrap(), b"x");
+    }
+
+    #[test]
+    fn errors_name_the_operation_and_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        let mut b = Builder::new(Vec::new());
+        raw(&mut b, "b", b"", EntryType::Link, Some("missing"));
+        let err = extract(Cursor::new(b.into_inner().unwrap()), &root).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("hardlink"), "{}", msg);
+        assert!(msg.contains("root/b"), "{}", msg);
+    }
+
+    #[test]
+    fn setuid_and_setgid_bits_are_not_applied() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("f");
+        fs::write(&f, b"x").unwrap();
+        set_mode(&f, 0o6755, 0o600).unwrap();
+        assert_eq!(fs::metadata(&f).unwrap().permissions().mode() & 0o7000, 0);
     }
 
     #[test]
