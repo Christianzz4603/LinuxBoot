@@ -208,7 +208,11 @@ private fun model(vm: FirmwareViewModel, info: SystemInfo, onShutdown: () -> Uni
                             else -> "NO VERIFIED RECIPE FOR THIS DISTRIBUTION YET"
                         },
                         "SESSION: " + if (vm.sessionRunning) "RUNNING" else "STOPPED",
+                        "BACKUPS: ${vm.backups[m.id]?.size ?: 0}" +
+                            (vm.backups[m.id]?.firstOrNull()?.let { " (newest: ${it.name}, ${formatBytes(it.length())})" } ?: ""),
                         vm.desktopBusy?.let { "$it..." },
+                        vm.opBusy?.let { "$it... (no progress is available for this step)" },
+                        vm.notice,
                         if (!vm.proot.available) "PROOT: ${vm.proot.problem}" else null,
                     ) + shell + desk,
                     "ACTIONS",
@@ -220,7 +224,16 @@ private fun model(vm: FirmwareViewModel, info: SystemInfo, onShutdown: () -> Uni
                             ready && idle && !hasDesktop && DesktopInstaller.supports(m.id),
                         ) { vm.installDesktop(m.id) },
                         MenuItem("Run shell test (PRoot)", ready && !vm.shellRunning) { vm.runShellTest(m.id) },
-                        MenuItem("Remove distribution", vm.installingId != m.id && !vm.sessionRunning) {
+                        MenuItem(
+                            "Back up rootfs",
+                            m.state == DistroState.EXTRACTED && idle && vm.opBusy == null && !vm.sessionRunning,
+                        ) { vm.backupDistro(m.id) },
+                        MenuItem(
+                            "Restore newest backup",
+                            m.state == DistroState.EXTRACTED && idle && vm.opBusy == null && !vm.sessionRunning &&
+                                vm.backups[m.id]?.isNotEmpty() == true,
+                        ) { vm.open(Screen.ConfirmRestore(m.id)) },
+                        MenuItem("Remove distribution", vm.installingId != m.id && !vm.sessionRunning && vm.opBusy == null) {
                             vm.open(Screen.ConfirmRemove(m.id))
                         },
                     ),
@@ -239,6 +252,24 @@ private fun model(vm: FirmwareViewModel, info: SystemInfo, onShutdown: () -> Uni
                 null,
                 listOf(
                     MenuItem("Confirm removal") { vm.remove(s.id) },
+                    MenuItem("Cancel") { vm.back() },
+                ),
+            )
+        }
+        is Screen.ConfirmRestore -> {
+            val m = vm.installed.firstOrNull { it.id == s.id }
+            val b = vm.backups[s.id]?.firstOrNull()
+            Model(
+                "CONFIRM RESTORE",
+                listOf(
+                    "Replace ${m?.name ?: s.id}'s rootfs with:",
+                    b?.name ?: "(no backup)",
+                    "Changes made after that backup are lost.",
+                    "The current rootfs is kept until the restore succeeds.",
+                ),
+                null,
+                listOf(
+                    MenuItem("Confirm restore", b != null) { vm.restoreDistro(s.id) },
                     MenuItem("Cancel") { vm.back() },
                 ),
             )
