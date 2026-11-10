@@ -9,7 +9,7 @@ use jni::objects::{JClass, JString};
 use jni::sys::jstring;
 use jni::JNIEnv;
 
-use crate::{extract, verify};
+use crate::{archive, extract, verify};
 
 fn read(env: &mut JNIEnv, s: &JString) -> Result<String, String> {
     env.get_string(s).map(String::from).map_err(|e| e.to_string())
@@ -62,4 +62,23 @@ pub extern "system" fn Java_linuxboot_runtime_NativeRuntime_nativeExtract<'l>(
         ))
     });
     to_jstring(&mut env, out)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_linuxboot_runtime_NativeRuntime_nativeBackup<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    root: JString<'l>,
+    out: JString<'l>,
+) -> jstring {
+    let res = guarded(|| {
+        let r = read(&mut env, &root)?;
+        let o = read(&mut env, &out)?;
+        let rep = archive::create_tar_xz(Path::new(&r), Path::new(&o)).map_err(|e| e.to_string())?;
+        Ok(format!(
+            "OK:{},{},{},{},{}",
+            rep.dirs, rep.files, rep.symlinks, rep.hardlinks, rep.skipped
+        ))
+    });
+    to_jstring(&mut env, res)
 }
