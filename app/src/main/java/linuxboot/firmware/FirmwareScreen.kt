@@ -284,6 +284,7 @@ private fun model(vm: FirmwareViewModel, info: SystemInfo, onShutdown: () -> Uni
             )
             if (d == null) {
                 l += "STORAGE TEST: NOT RUN YET (runs automatically on first install)"
+                vm.storage.decisionProblem?.let { l += "SAVED RESULT UNREADABLE: $it" }
             } else {
                 l += "ROOTFS PLACEMENT: ${locText(d.location)}"
                 l += probeLines(d.probe)
