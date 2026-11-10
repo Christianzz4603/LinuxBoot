@@ -124,7 +124,7 @@ class Installer(private val storage: LinuxBootStorage, private val store: Distro
                     InstallStatus(
                         Phase.EXTRACTING,
                         "${rep.files} files, ${rep.dirs} dirs, ${rep.symlinks} symlinks, " +
-                            "${rep.hardlinks} hardlinks, ${rep.skipped} skipped",
+                            "${rep.hardlinks} hardlinks (${rep.hardlinkCopies} stored as copies: Android refuses hard links), ${rep.skipped} skipped",
                     ),
                 )
 
