@@ -26,6 +26,16 @@ object NativeRuntime {
     // Private on purpose: internal members get mangled names that JNI cannot find.
     @JvmStatic private external fun nativeVerifySha256(path: String, expected: String): String
     @JvmStatic private external fun nativeExtract(archive: String, root: String): String
+    @JvmStatic private external fun nativeBackup(root: String, out: String): String
+
+    /** Archives [root] to [out] (.tar.xz). Blocking, no progress; reports skipped special files. */
+    fun backup(root: File, out: File): Result<ExtractReport> {
+        if (!available) return Result.failure(IllegalStateException("Native runtime unavailable: $loadError"))
+        val r = nativeBackup(root.path, out.path)
+        if (!r.startsWith("OK:")) return Result.failure(IOException(r.removePrefix("ERR:")))
+        val n = r.removePrefix("OK:").split(",").map { it.toLong() }
+        return Result.success(ExtractReport(n[0], n[1], n[2], n[3], n[4]))
+    }
 
     fun verifySha256(file: File, expected: String): Result<Unit> {
         if (!available) return Result.failure(IllegalStateException("Native runtime unavailable: $loadError"))
