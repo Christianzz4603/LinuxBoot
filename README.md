@@ -48,6 +48,9 @@ That storage is usually FUSE-backed and often lacks symlinks and permission bits
 
 ## Known limits
 
+- This PRoot build (5.1.0-mod-0.15) has no `--sysvipc`, and Android blocks SysV shared memory, so the X server runs with MIT-SHM disabled (slower drawing, but no crashes from blocked syscalls).
+- Stopping a session relies on `--kill-on-exit`; if a desktop was left running, stop it from the distribution screen before removing or backing it up.
+
 - Android's SELinux policy forbids hard links in app storage. Extraction stores each hard link as a copy of the file (extra disk space) and reports how many; setuid/setgid bits are not applied.
 
 - Cancelling during extraction takes effect after the current extraction step finishes.
