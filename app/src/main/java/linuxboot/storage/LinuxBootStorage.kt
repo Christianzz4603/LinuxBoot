@@ -48,6 +48,11 @@ class LinuxBootStorage(context: Context) {
         ?.let { File(it, "LinuxBoot") }
 
     val isExternal: Boolean = externalBase != null
+
+    /** Set when a saved storage-test result exists but could not be read. */
+    @Volatile
+    var decisionProblem: String? = null
+        private set
     val dataRoot: File = externalBase ?: internalBase
 
     val distributions = File(dataRoot, "distributions")
@@ -87,8 +92,10 @@ class LinuxBootStorage(context: Context) {
         val f = File(config, "storage.json")
         if (!f.isFile) return null
         return try {
+            decisionProblem = null
             StorageDecision.fromJson(JSONObject(f.readText()))
         } catch (e: Exception) {
+            decisionProblem = "${e.javaClass.simpleName}: ${e.message}"
             null
         }
     }
