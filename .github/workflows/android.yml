@@ -19,6 +19,8 @@ jobs:
   # signed commit; PRoot itself is fetched by upstream's get-proot.sh at tag v0.15_release.
   # talloc 2.1.14 bundles a Python 2 waf, and PRoot's loader step needs gawk's strtonum,
   # so the build runs in an Ubuntu 20.04 container with python2 and gawk.
+  # The result is cached: upstream mirrors occasionally return 503, and a cache hit skips
+  # the network entirely. Bump the "-vN" suffix of the key to force a rebuild.
   proot:
     runs-on: ubuntu-latest
     steps:
@@ -26,39 +28,59 @@ jobs:
         with:
           repository: green-green-avk/build-proot-android
           ref: 01f83b8841358450c78333d1b33ab30d4943bec4
+      - name: Restore previously built PRoot
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: out
+          key: proot-aarch64-01f83b88-ndk23.2.8568313-v1
       - name: Install NDK 23.2.8568313
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;23.2.8568313"
-      - name: Build PRoot for aarch64
+      - name: Build PRoot for aarch64 (retried)
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           NDK="$ANDROID_HOME/ndk/23.2.8568313"
           sed -i "s|^NDK=.*|NDK=\"$NDK\"|" config
           sed -i "s|^ARCHS=.*|ARCHS='aarch64'|" config
-          docker run --rm -e HUID="$(id -u)" -e HGID="$(id -g)" \
-            -v "$PWD":/work -v "$NDK":"$NDK":ro -w /work ubuntu:20.04 bash -ec '
-              export DEBIAN_FRONTEND=noninteractive
-              apt-get update
-              apt-get install -y --no-install-recommends python2 gawk build-essential wget ca-certificates
-              ln -sf /usr/bin/python2 /usr/local/bin/python
-              ./get-talloc.sh
-              ./get-proot.sh
-              ./make-talloc-static.sh
-              ./make-proot-for-apk.sh
-              chown -R "$HUID:$HGID" /work
-            '
+          ok=0
+          for attempt in 1 2 3; do
+            sudo rm -rf build
+            if docker run --rm -e HUID="$(id -u)" -e HGID="$(id -g)" \
+              -v "$PWD":/work -v "$NDK":"$NDK":ro -w /work ubuntu:20.04 bash -ec '
+                export DEBIAN_FRONTEND=noninteractive
+                apt-get update
+                apt-get install -y --no-install-recommends python2 gawk build-essential wget ca-certificates
+                ln -sf /usr/bin/python2 /usr/local/bin/python
+                ./get-talloc.sh
+                ./get-proot.sh
+                ./make-talloc-static.sh
+                ./make-proot-for-apk.sh
+                chown -R "$HUID:$HGID" /work
+              '; then
+              ok=1
+              break
+            fi
+            echo "PRoot build attempt $attempt failed; retrying in 30s"
+            sleep 30
+          done
+          [ "$ok" = 1 ]
       - name: Collect jniLibs
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p out/arm64-v8a
           cp build/root-aarch64/root-apk/bin/lib*.so out/arm64-v8a/
-          ls -l out/arm64-v8a
+      - name: Show what will be packaged
+        run: ls -l out/arm64-v8a
       - uses: actions/upload-artifact@v4
         with:
           name: proot-aarch64
           path: out
 
-  # Runs even if the PRoot job fails, so the Kotlin/Rust Android build is always exercised.
-  # Without the PRoot artifact the app builds and reports PRoot as missing.
+  # Runs even if the PRoot job fails, so the Kotlin/Rust build is always exercised, but an
+  # APK is only uploaded if PRoot and the Rust library are actually inside it.
   build:
     needs: proot
     if: ${{ !cancelled() }}
@@ -84,6 +106,14 @@ jobs:
           gradle-version: "8.9"
       - name: Unit tests and debug APK (compiles the Rust library via cargo-ndk)
         run: gradle testDebugUnitTest assembleDebug --no-daemon
+      - name: Require PRoot and the Rust library inside the APK
+        run: |
+          unzip -l app/build/outputs/apk/debug/*.apk | grep -E "lib/arm64-v8a/" || true
+          n=$(unzip -l app/build/outputs/apk/debug/*.apk | grep -cE "lib/arm64-v8a/(libproot|libproot-loader|liblinuxboot_runtime)\.so")
+          if [ "$n" -ne 3 ]; then
+            echo "::error::Expected libproot.so, libproot-loader.so and liblinuxboot_runtime.so in the APK but found $n. Refusing to publish."
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: linuxboot-debug-apk
