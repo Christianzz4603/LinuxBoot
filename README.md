@@ -48,6 +48,8 @@ That storage is usually FUSE-backed and often lacks symlinks and permission bits
 
 ## Known limits
 
+- Android's SELinux policy forbids hard links in app storage. Extraction stores each hard link as a copy of the file (extra disk space) and reports how many; setuid/setgid bits are not applied.
+
 - Cancelling during extraction takes effect after the current extraction step finishes.
 - Installs run while the app is in the foreground; no background service. An interrupted download resumes on the next Install.
 - Extracted-size and RAM checks are heuristics.
