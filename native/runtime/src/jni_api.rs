@@ -57,8 +57,8 @@ pub extern "system" fn Java_linuxboot_runtime_NativeRuntime_nativeExtract<'l>(
         let r = read(&mut env, &root)?;
         let rep = extract::extract_file(Path::new(&a), Path::new(&r)).map_err(|e| e.to_string())?;
         Ok(format!(
-            "OK:{},{},{},{},{}",
-            rep.dirs, rep.files, rep.symlinks, rep.hardlinks, rep.skipped
+            "OK:{},{},{},{},{},{}",
+            rep.dirs, rep.files, rep.symlinks, rep.hardlinks, rep.skipped, rep.hardlink_copies
         ))
     });
     to_jstring(&mut env, out)
@@ -76,8 +76,8 @@ pub extern "system" fn Java_linuxboot_runtime_NativeRuntime_nativeBackup<'l>(
         let o = read(&mut env, &out)?;
         let rep = archive::create_tar_xz(Path::new(&r), Path::new(&o)).map_err(|e| e.to_string())?;
         Ok(format!(
-            "OK:{},{},{},{},{}",
-            rep.dirs, rep.files, rep.symlinks, rep.hardlinks, rep.skipped
+            "OK:{},{},{},{},{},{}",
+            rep.dirs, rep.files, rep.symlinks, rep.hardlinks, rep.skipped, rep.hardlink_copies
         ))
     });
     to_jstring(&mut env, res)
