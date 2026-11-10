@@ -44,6 +44,8 @@ object DesktopInstaller {
 
         // apt normally drops to an "_apt" user, which does not work under PRoot; stay root.
         // xfonts-base and x11-xkb-utils are Recommends: without them the X server can fail to start.
+        // tigervnc-tools is what ships tigervncpasswd (tigervnc-common does not); checked against
+        // packages.debian.org (trixie) and packages.ubuntu.com (noble) file lists.
         "debian", "ubuntu" -> (
             listOf(
                 "set -e",
@@ -51,7 +53,7 @@ object DesktopInstaller {
                 "echo 'APT::Sandbox::User \"root\";' > /etc/apt/apt.conf.d/99linuxboot-proot",
                 "apt-get update",
                 "apt-get install -y --no-install-recommends xfce4 xfce4-terminal tigervnc-standalone-server " +
-                    "tigervnc-common dbus-x11 fonts-dejavu-core xfonts-base x11-xkb-utils xkb-data",
+                    "tigervnc-tools dbus-x11 fonts-dejavu-core xfonts-base x11-xkb-utils xkb-data",
             ) + finish(password)
             ).joinToString(System.lineSeparator())
 
