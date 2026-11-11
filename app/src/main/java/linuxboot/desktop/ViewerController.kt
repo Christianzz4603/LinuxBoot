@@ -40,6 +40,13 @@ class ViewerController(val client: RfbClient) : RfbClient.Listener {
     var closedReason by mutableStateOf<String?>(null)
         private set
 
+    /** True while the server shows an I-beam pointer (over editable or selectable text). */
+    var textCursor by mutableStateOf(false)
+        private set
+
+    /** Open the on-screen keyboard when tapping while the pointer is an I-beam. */
+    var autoKeyboard by mutableStateOf(true)
+
     /** false = trackpad (cursor offset from the finger), true = the cursor jumps to the touch. */
     var directTouch by mutableStateOf(false)
 
@@ -231,6 +238,10 @@ class ViewerController(val client: RfbClient) : RfbClient.Listener {
             bitmap?.setPixels(client.pixels, y * client.width + x, client.width, x, y, w, h)
         }
         frame++
+    }
+
+    override fun onCursor(isText: Boolean) {
+        textCursor = isText
     }
 
     override fun onClosed(reason: String?) {
