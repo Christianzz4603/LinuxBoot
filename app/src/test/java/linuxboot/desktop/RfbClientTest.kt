@@ -34,6 +34,13 @@ class RfbClientTest {
         return c.doFinal(challenge)
     }
 
+    /** 9x16 I-beam: serifs on rows 0 and 15 (x=1..7), stem at x=4. Two mask bytes per row. */
+    private fun ibeamMask(): ByteArray {
+        val m = ByteArray(2 * 16)
+        for (y in 0 until 16) m[y * 2] = (if (y == 0 || y == 15) 0x7F else 0x08).toByte()
+        return m
+    }
+
     @Test
     fun handshakeFrameAndInput() {
         val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
@@ -58,12 +65,17 @@ class RfbClientTest {
                 val name = "testsrv".toByteArray()
                 o.writeInt(name.size); o.write(name); o.flush()
                 i.readFully(ByteArray(20))      // SetPixelFormat
-                i.readFully(ByteArray(4 + 12))  // SetEncodings (3 encodings)
+                i.readFully(ByteArray(4 + 16))  // SetEncodings (4 encodings)
                 i.readFully(ByteArray(10))      // first update request
                 // One Raw rect 2x1: pixel0 = red, pixel1 = blue (bytes are B,G,R,pad)
                 o.writeByte(0); o.writeByte(0); o.writeShort(1)
                 o.writeShort(0); o.writeShort(0); o.writeShort(2); o.writeShort(1); o.writeInt(0)
                 o.write(byteArrayOf(0, 0, 0xFF.toByte(), 0, 0xFF.toByte(), 0, 0, 0)); o.flush()
+                // Cursor pseudo-encoding: a 9x16 I-beam (x,y = hotspot; colours ignored, then the mask)
+                o.writeByte(0); o.writeByte(0); o.writeShort(1)
+                o.writeShort(4); o.writeShort(8); o.writeShort(9); o.writeShort(16); o.writeInt(-239)
+                o.write(ByteArray(9 * 16 * 4))
+                o.write(ibeamMask()); o.flush()
                 var got = 0
                 while (got < 2) {
                     when (i.readUnsignedByte()) {
@@ -83,14 +95,17 @@ class RfbClientTest {
         assertEquals("testsrv", client.serverName)
 
         val updated = CountDownLatch(1)
+        val textCursor = CountDownLatch(1)
         client.start(object : RfbClient.Listener {
             override fun onSize(width: Int, height: Int) {}
             override fun onUpdate(x: Int, y: Int, w: Int, h: Int) { updated.countDown() }
             override fun onClosed(reason: String?) {}
+            override fun onCursor(isText: Boolean) { if (isText) textCursor.countDown() }
         })
         assertTrue("no framebuffer update", updated.await(5, TimeUnit.SECONDS))
         assertEquals(0xFFFF0000.toInt(), client.pixels[0])
         assertEquals(0xFF0000FF.toInt(), client.pixels[1])
+        assertTrue("I-beam cursor not recognised", textCursor.await(5, TimeUnit.SECONDS))
 
         client.pointer(1, 1, 0)
         client.key(true, 0xFF0D)
