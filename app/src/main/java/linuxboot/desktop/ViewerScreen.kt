@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.displayCutoutPadding
@@ -86,7 +87,7 @@ private enum class Panel { NONE, SETTINGS, RESOLUTION, INFO, EXIT }
 private val Ink = Color(0xFF0000AA)
 
 /** Touch gestures modelled on a trackpad (the interaction concept of common VNC viewers). */
-private fun Modifier.touchGestures(ctl: ViewerController, onTouch: () -> Unit): Modifier =
+private fun Modifier.touchGestures(ctl: ViewerController, onTouch: () -> Unit, onTapped: () -> Unit): Modifier =
     pointerInput(ctl) {
         val slop = viewConfiguration.touchSlop
         awaitEachGesture {
@@ -167,7 +168,10 @@ private fun Modifier.touchGestures(ctl: ViewerController, onTouch: () -> Unit): 
 
             val dt = tEnd - t0
             when {
-                ctl.directTouch -> ctl.release(LEFT)
+                ctl.directTouch -> {
+                    ctl.release(LEFT)
+                    if (moved < slop && dt < 300L) onTapped()
+                }
                 holding -> {
                     ctl.release(LEFT)
                     ctl.lastTapUp = 0L
@@ -175,6 +179,7 @@ private fun Modifier.touchGestures(ctl: ViewerController, onTouch: () -> Unit): 
                 maxPointers == 1 -> {
                     if (moved < slop && dt < 300L) {
                         ctl.click(LEFT)
+                        onTapped()
                         ctl.lastTapUp = tEnd
                         ctl.lastTapCount = 1
                     } else {
@@ -347,8 +352,24 @@ fun ViewerScreen(vm: FirmwareViewModel) {
     var touchTick by remember { mutableIntStateOf(0) }
     var showKeyboard by remember { mutableStateOf(false) }
     var softKeyboard by remember { mutableStateOf(false) }
+    var autoOpened by remember { mutableStateOf(false) }
     var panel by remember { mutableStateOf(Panel.NONE) }
     val rootFocus = remember { FocusRequester() }
+
+    // VNC does not report keyboard focus, but the pointer turns into an I-beam over text.
+    // Tapping on text opens the keyboard; tapping elsewhere closes it again if we opened it.
+    fun onDesktopTap() {
+        if (!ctl.autoKeyboard) return
+        if (ctl.textCursor) {
+            if (!softKeyboard) {
+                softKeyboard = true
+                autoOpened = true
+            }
+        } else if (softKeyboard && autoOpened) {
+            softKeyboard = false
+            autoOpened = false
+        }
+    }
     val softFocus = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
 
@@ -379,6 +400,7 @@ fun ViewerScreen(vm: FirmwareViewModel) {
             .fillMaxSize()
             .background(Color.Black)
             .displayCutoutPadding()
+            .imePadding()
             .focusRequester(rootFocus)
             .focusable()
             .onPreviewKeyEvent { forwardKey(ctl, it) },
@@ -387,7 +409,7 @@ fun ViewerScreen(vm: FirmwareViewModel) {
             Modifier
                 .fillMaxSize()
                 .onSizeChanged { ctl.setViewSize(it.width.toFloat(), it.height.toFloat()) }
-                .touchGestures(ctl) { touchTick++ }
+                .touchGestures(ctl, onTouch = { touchTick++ }, onTapped = { onDesktopTap() })
                 .mouseInput(ctl),
         ) {
             ctl.frame // subscribe to framebuffer changes
@@ -436,7 +458,10 @@ fun ViewerScreen(vm: FirmwareViewModel) {
         if (showKeyboard) {
             VirtualKeyboard(
                 ctl,
-                onSoft = { softKeyboard = !softKeyboard },
+                onSoft = {
+                    softKeyboard = !softKeyboard
+                    autoOpened = false
+                },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
@@ -519,6 +544,8 @@ fun ViewerScreen(vm: FirmwareViewModel) {
                     TBtn("SCALING: 100%") { ctl.actualSize() }
                     PLine("ZOOM: ${(ctl.zoom * 100).roundToInt()}%  (pinch to zoom)")
                     TBtn("TOOLBAR PINNED: " + if (pinned) "YES" else "NO") { pinned = !pinned }
+                    TBtn("AUTO KEYBOARD ON TEXT: " + if (ctl.autoKeyboard) "ON" else "OFF") { ctl.autoKeyboard = !ctl.autoKeyboard }
+                    PLine("Opens when you tap while the pointer is an I-beam.")
                 }
                 Panel.RESOLUTION -> PanelBox("RESOLUTION", { panel = Panel.NONE }) {
                     PLine("CURRENT: ${ctl.fbW}x${ctl.fbH}")
