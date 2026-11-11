@@ -22,6 +22,9 @@ class RfbClient(private val host: String, private val port: Int, private val pas
         fun onSize(width: Int, height: Int)
         fun onUpdate(x: Int, y: Int, w: Int, h: Int)
         fun onClosed(reason: String?)
+
+        /** The server changed the pointer shape; [isText] is true for an I-beam (text) cursor. */
+        fun onCursor(isText: Boolean) {}
     }
 
     @Volatile
@@ -124,8 +127,8 @@ class RfbClient(private val host: String, private val port: Int, private val pas
             output.writeByte(16); output.writeByte(8); output.writeByte(0)
             output.write(ByteArray(3))
             // SetEncodings: CopyRect, Raw, DesktopSize
-            output.writeByte(2); output.writeByte(0); output.writeShort(3)
-            output.writeInt(1); output.writeInt(0); output.writeInt(-223)
+            output.writeByte(2); output.writeByte(0); output.writeShort(4)
+            output.writeInt(1); output.writeInt(0); output.writeInt(-223); output.writeInt(-239)
             output.flush()
         }
         requestUpdate(false)
@@ -213,10 +216,33 @@ class RfbClient(private val host: String, private val port: Int, private val pas
                     listener.onSize(w, h)
                     needFull = true
                 }
+                -239 -> readCursor(w, h, listener)
                 else -> throw RfbException("Unsupported encoding $enc")
             }
         }
         if (needFull) requestUpdate(false) else requestUpdate(true)
+    }
+
+    /** Cursor pseudo-encoding: w*h pixels in our pixel format, then a 1-bit mask (rows padded to bytes). */
+    private fun readCursor(w: Int, h: Int, listener: Listener) {
+        val pixelBytes = w.toLong() * h * 4
+        val maskStride = (w + 7) / 8
+        val maskBytes = maskStride.toLong() * h
+        if (w > 256 || h > 256) {
+            skipFully(pixelBytes + maskBytes)
+            listener.onCursor(false)
+            return
+        }
+        skipFully(pixelBytes) // colours are not needed to recognise the shape
+        val mask = ByteArray(maskBytes.toInt())
+        input.readFully(mask)
+        val bits = BooleanArray(w * h)
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                bits[y * w + x] = (mask[y * maskStride + (x shr 3)].toInt() and (0x80 shr (x and 7))) != 0
+            }
+        }
+        listener.onCursor(CursorShape.isTextCursor(bits, w, h))
     }
 
     private fun checkBounds(x: Int, y: Int, w: Int, h: Int) {
