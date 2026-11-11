@@ -1,5 +1,9 @@
 package linuxboot.desktop
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
 import android.view.InputDevice
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
@@ -27,6 +31,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -58,6 +63,7 @@ import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.isTertiaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
@@ -212,6 +218,15 @@ private fun forwardKey(ctl: ViewerController, ev: KeyEvent): Boolean {
     }
 }
 
+private fun Context.findActivity(): Activity? {
+    var c: Context = this
+    while (c is ContextWrapper) {
+        if (c is Activity) return c
+        c = c.baseContext
+    }
+    return null
+}
+
 private fun inputSummary(): String {
     var kb = 0
     var mice = 0
@@ -305,6 +320,17 @@ private fun VirtualKeyboard(ctl: ViewerController, onSoft: () -> Unit, modifier:
 
 @Composable
 fun ViewerScreen(vm: FirmwareViewModel) {
+    // The desktop is landscape: lock to landscape (either direction, following the sensor)
+    // while it is open and restore whatever the app had when it closes. The activity handles
+    // orientation changes itself, so the session is not restarted by the rotation.
+    val context = LocalContext.current
+    DisposableEffect(Unit) {
+        val activity = context.findActivity()
+        val previous = activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        onDispose { activity?.requestedOrientation = previous }
+    }
+
     val ctl = vm.viewer
     if (ctl == null) {
         BackHandler { vm.exitViewer(false) }
