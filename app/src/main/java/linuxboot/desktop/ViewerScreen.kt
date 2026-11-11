@@ -17,19 +17,27 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -67,14 +75,21 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.delay
+import linuxboot.R
 import linuxboot.firmware.FirmwareViewModel
+import linuxboot.ui.AppButton
+import linuxboot.ui.Btn
+import linuxboot.ui.Ico
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -82,9 +97,18 @@ private const val LEFT = 1
 private const val MIDDLE = 2
 private const val RIGHT = 4
 
-private enum class Panel { NONE, SETTINGS, RESOLUTION, INFO, EXIT }
+private enum class Sheet { NONE, SETTINGS, RESOLUTION, INFO, EXIT }
 
-private val Ink = Color(0xFF0000AA)
+// The viewer floats over someone else's desktop, so its chrome is a fixed dark glass
+// regardless of the app theme.
+private val Glass = Color(0xE6161B22)
+private val GlassPanel = Color(0xF2161B22)
+private val Ink = Color(0xFFE6EAF0)
+private val Muted = Color(0xFF9AA6B6)
+private val Accent = Color(0xFF8AB4FF)
+private val OnAccent = Color(0xFF0A2257)
+private val Keycap = Color(0xFF2A3341)
+private val KeycapOnce = Color(0xFF3B5EA8)
 
 /** Touch gestures modelled on a trackpad (the interaction concept of common VNC viewers). */
 private fun Modifier.touchGestures(ctl: ViewerController, onTouch: () -> Unit, onTapped: () -> Unit): Modifier =
@@ -243,104 +267,162 @@ private fun inputSummary(): String {
         ) kb++
         if (d.sources and InputDevice.SOURCE_MOUSE == InputDevice.SOURCE_MOUSE) mice++
     }
-    return "PHYSICAL KEYBOARDS: $kb   MICE: $mice"
+    return "Keyboards connected: $kb - Mice connected: $mice"
 }
 
-@Composable
-private fun TBtn(label: String, active: Boolean = false, onClick: () -> Unit) {
-    Text(
-        text = label,
-        color = if (active) Color.Black else Color.White,
-        fontFamily = FontFamily.Monospace,
-        fontSize = 12.sp,
-        modifier = Modifier
-            .padding(horizontal = 2.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(if (active) Color(0xFFC0C0C0) else Color(0x33FFFFFF))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-    )
-}
+// ---- viewer chrome ----------------------------------------------------------------------
 
 @Composable
-private fun PanelBox(title: String, onClose: () -> Unit, content: @Composable () -> Unit) {
-    Column(
+private fun GlassBtn(icon: Int, label: String, active: Boolean = false, onClick: () -> Unit) {
+    Box(
         Modifier
-            .padding(24.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xEE101060))
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .size(42.dp)
+            .clip(CircleShape)
+            .background(if (active) Accent else Color.Transparent)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        Text(title, color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
-        content()
-        TBtn("CLOSE", onClick = onClose)
+        Ico(icon, size = 22.dp, tint = if (active) OnAccent else Ink, description = label)
     }
 }
 
 @Composable
-private fun PLine(text: String) =
-    Text(text, color = Color(0xFFE6E6E6), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+private fun GlassSheet(title: String, onClose: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier
+            .widthIn(max = 440.dp)
+            .heightIn(max = 330.dp)
+            .padding(12.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(GlassPanel)
+            .padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(title, color = Ink, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            GlassBtn(R.drawable.ic_close, "Close", onClick = onClose)
+        }
+        Column(
+            Modifier.verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            content = content,
+        )
+    }
+}
 
 @Composable
-private fun VirtualKeyboard(ctl: ViewerController, onSoft: () -> Unit, modifier: Modifier) {
-    fun mod(label: String, sym: Int) = Pair(label, sym)
+private fun GlassLine(text: String, muted: Boolean = false) {
+    Text(text, color = if (muted) Muted else Ink, style = MaterialTheme.typography.bodyMedium)
+}
+
+@Composable
+private fun GlassOption(label: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Keycap)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) { Text(label, color = Ink, style = MaterialTheme.typography.bodyMedium) }
+}
+
+@Composable
+private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Ink, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+@Composable
+private fun KeyCap(label: String, state: ModState = ModState.OFF, wide: Boolean = false, onClick: () -> Unit) {
+    val bg = when (state) {
+        ModState.OFF -> Keycap
+        ModState.ONCE -> KeycapOnce
+        ModState.LOCKED -> Accent
+    }
+    Box(
+        Modifier
+            .padding(2.dp)
+            .height(40.dp)
+            .widthIn(min = if (wide) 64.dp else 44.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(bg)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            color = if (state == ModState.LOCKED) OnAccent else Ink,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+@Composable
+private fun KeyboardPanel(ctl: ViewerController, onSoft: () -> Unit, modifier: Modifier) {
     Column(
         modifier
             .fillMaxWidth()
-            .background(Color(0xDD101040))
-            .padding(4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+            .background(Glass)
+            .padding(6.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Row(Modifier.horizontalScroll(rememberScrollState())) {
-            listOf(mod("CTRL", Keysyms.CTRL), mod("ALT", Keysyms.ALT), mod("SHIFT", Keysyms.SHIFT), mod("SUPER", Keysyms.SUPER))
+            listOf("Ctrl" to Keysyms.CTRL, "Alt" to Keysyms.ALT, "Shift" to Keysyms.SHIFT, "Super" to Keysyms.SUPER)
                 .forEach { (label, sym) ->
                     val st = ctl.mods[sym] ?: ModState.OFF
-                    TBtn(
-                        label + when (st) { ModState.OFF -> ""; ModState.ONCE -> "*"; ModState.LOCKED -> "#" },
-                        active = st != ModState.OFF,
-                    ) { ctl.cycleModifier(sym) }
+                    KeyCap(label, st, wide = true) { ctl.cycleModifier(sym) }
                 }
-            TBtn("ABC") { onSoft() }
-            TBtn("ESC") { ctl.tap(Keysyms.ESCAPE) }
-            TBtn("TAB") { ctl.tap(Keysyms.TAB) }
-            TBtn("DEL") { ctl.tap(Keysyms.DELETE) }
-            TBtn("INS") { ctl.tap(Keysyms.INSERT) }
+            KeyCap("Text", wide = true) { onSoft() }
+            KeyCap("Esc") { ctl.tap(Keysyms.ESCAPE) }
+            KeyCap("Tab") { ctl.tap(Keysyms.TAB) }
+            KeyCap("Del") { ctl.tap(Keysyms.DELETE) }
+            KeyCap("Ins") { ctl.tap(Keysyms.INSERT) }
         }
         Row(Modifier.horizontalScroll(rememberScrollState())) {
-            TBtn("HOME") { ctl.tap(Keysyms.HOME) }
-            TBtn("END") { ctl.tap(Keysyms.END) }
-            TBtn("PGUP") { ctl.tap(Keysyms.PAGE_UP) }
-            TBtn("PGDN") { ctl.tap(Keysyms.PAGE_DOWN) }
-            TBtn("<") { ctl.tap(Keysyms.LEFT) }
-            TBtn("^") { ctl.tap(Keysyms.UP) }
-            TBtn("v") { ctl.tap(Keysyms.DOWN) }
-            TBtn(">") { ctl.tap(Keysyms.RIGHT) }
+            KeyCap("Home") { ctl.tap(Keysyms.HOME) }
+            KeyCap("End") { ctl.tap(Keysyms.END) }
+            KeyCap("PgUp") { ctl.tap(Keysyms.PAGE_UP) }
+            KeyCap("PgDn") { ctl.tap(Keysyms.PAGE_DOWN) }
+            KeyCap("Left", wide = true) { ctl.tap(Keysyms.LEFT) }
+            KeyCap("Up") { ctl.tap(Keysyms.UP) }
+            KeyCap("Down", wide = true) { ctl.tap(Keysyms.DOWN) }
+            KeyCap("Right", wide = true) { ctl.tap(Keysyms.RIGHT) }
         }
         Row(Modifier.horizontalScroll(rememberScrollState())) {
-            for (i in 1..12) TBtn("F$i") { ctl.tap(Keysyms.F1 + i - 1) }
+            for (i in 1..12) KeyCap("F$i") { ctl.tap(Keysyms.F1 + i - 1) }
         }
     }
 }
 
 @Composable
 fun ViewerScreen(vm: FirmwareViewModel) {
-    // The desktop is landscape: lock to landscape (either direction, following the sensor)
-    // while it is open and restore whatever the app had when it closes. The activity handles
-    // orientation changes itself, so the session is not restarted by the rotation.
+    // The desktop is landscape and full screen: lock to landscape (either direction, following the
+    // sensor) and hide the system bars while it is open; restore both when it closes. The activity
+    // handles orientation changes itself, so rotating does not restart the session.
     val context = LocalContext.current
     DisposableEffect(Unit) {
         val activity = context.findActivity()
         val previous = activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        onDispose { activity?.requestedOrientation = previous }
+        val controller = activity?.let { WindowCompat.getInsetsController(it.window, it.window.decorView) }
+        controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller?.hide(WindowInsetsCompat.Type.systemBars())
+        onDispose {
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+            activity?.requestedOrientation = previous
+        }
     }
 
     val ctl = vm.viewer
     if (ctl == null) {
         BackHandler { vm.exitViewer(false) }
         Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-            Text("NO ACTIVE DESKTOP", color = Color.White, fontFamily = FontFamily.Monospace)
+            Text("No active desktop", color = Ink)
         }
         return
     }
@@ -353,7 +435,7 @@ fun ViewerScreen(vm: FirmwareViewModel) {
     var showKeyboard by remember { mutableStateOf(false) }
     var softKeyboard by remember { mutableStateOf(false) }
     var autoOpened by remember { mutableStateOf(false) }
-    var panel by remember { mutableStateOf(Panel.NONE) }
+    var sheet by remember { mutableStateOf(Sheet.NONE) }
     val rootFocus = remember { FocusRequester() }
 
     // VNC does not report keyboard focus, but the pointer turns into an I-beam over text.
@@ -370,12 +452,13 @@ fun ViewerScreen(vm: FirmwareViewModel) {
             autoOpened = false
         }
     }
+
     val softFocus = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
 
     LaunchedEffect(Unit) { rootFocus.requestFocus() }
-    LaunchedEffect(touchTick, pinned, toolbarVisible, panel, showKeyboard) {
-        if (toolbarVisible && !pinned && panel == Panel.NONE && !showKeyboard) {
+    LaunchedEffect(touchTick, pinned, toolbarVisible, sheet, showKeyboard) {
+        if (toolbarVisible && !pinned && sheet == Sheet.NONE && !showKeyboard) {
             delay(4000)
             toolbarVisible = false
         }
@@ -456,7 +539,7 @@ fun ViewerScreen(vm: FirmwareViewModel) {
         }
 
         if (showKeyboard) {
-            VirtualKeyboard(
+            KeyboardPanel(
                 ctl,
                 onSoft = {
                     softKeyboard = !softKeyboard
@@ -470,10 +553,10 @@ fun ViewerScreen(vm: FirmwareViewModel) {
             Box(
                 Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 4.dp)
-                    .size(56.dp, 18.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(Color(0x66FFFFFF))
+                    .padding(top = 6.dp)
+                    .size(56.dp, 6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(Color(0x99FFFFFF))
                     .clickable { toolbarVisible = true; touchTick++ },
             )
         } else {
@@ -482,16 +565,16 @@ fun ViewerScreen(vm: FirmwareViewModel) {
                     .align(Alignment.TopCenter)
                     .offset { IntOffset(tbOffset.x.roundToInt(), tbOffset.y.roundToInt()) }
                     .padding(top = 8.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xCC101040))
-                    .padding(4.dp)
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(Glass)
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
                     .horizontalScroll(rememberScrollState()),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    "::",
-                    color = Color.White,
-                    fontFamily = FontFamily.Monospace,
+                Ico(
+                    R.drawable.ic_drag,
+                    tint = Muted,
+                    description = "Move toolbar",
                     modifier = Modifier
                         .padding(horizontal = 8.dp)
                         .pointerInput(Unit) {
@@ -503,11 +586,16 @@ fun ViewerScreen(vm: FirmwareViewModel) {
                         },
                 )
                 if (minimized) {
-                    TBtn("+") { minimized = false; touchTick++ }
+                    GlassBtn(R.drawable.ic_plus, "Expand toolbar") { minimized = false; touchTick++ }
                 } else {
-                    TBtn("KEYS", showKeyboard) { showKeyboard = !showKeyboard; touchTick++ }
-                    TBtn(
-                        if (ctl.directTouch) "MOUSE:DIRECT" else if (ctl.panMode) "MOUSE:PAN" else "MOUSE:PAD",
+                    GlassBtn(R.drawable.ic_keyboard, "Keyboard", showKeyboard) { showKeyboard = !showKeyboard; touchTick++ }
+                    GlassBtn(
+                        when {
+                            ctl.directTouch -> R.drawable.ic_pointer
+                            ctl.panMode -> R.drawable.ic_move
+                            else -> R.drawable.ic_mouse
+                        },
+                        "Mouse mode",
                     ) {
                         // trackpad -> direct touch -> pan -> trackpad
                         when {
@@ -517,55 +605,57 @@ fun ViewerScreen(vm: FirmwareViewModel) {
                         }
                         touchTick++
                     }
-                    TBtn("RES") { panel = Panel.RESOLUTION }
-                    TBtn("SCALE") { if (ctl.zoom > 1.01f) ctl.fitToScreen() else ctl.actualSize(); touchTick++ }
-                    TBtn("SET") { panel = Panel.SETTINGS }
-                    TBtn("INFO") { panel = Panel.INFO }
-                    TBtn("PIN", pinned) { pinned = !pinned }
-                    TBtn("-") { minimized = true }
-                    TBtn("EXIT") { panel = Panel.EXIT }
+                    GlassBtn(R.drawable.ic_resolution, "Resolution") { sheet = Sheet.RESOLUTION }
+                    GlassBtn(R.drawable.ic_fit, "Scale") {
+                        if (ctl.zoom > 1.01f) ctl.fitToScreen() else ctl.actualSize()
+                        touchTick++
+                    }
+                    GlassBtn(R.drawable.ic_tune, "Settings") { sheet = Sheet.SETTINGS }
+                    GlassBtn(R.drawable.ic_info, "Session information") { sheet = Sheet.INFO }
+                    GlassBtn(R.drawable.ic_pin, "Pin toolbar", pinned) { pinned = !pinned }
+                    GlassBtn(R.drawable.ic_minus, "Minimize toolbar") { minimized = true }
+                    GlassBtn(R.drawable.ic_power, "Exit desktop") { sheet = Sheet.EXIT }
                 }
             }
         }
 
         Box(Modifier.align(Alignment.Center)) {
-            when (panel) {
-                Panel.NONE -> Unit
-                Panel.SETTINGS -> PanelBox("DESKTOP SETTINGS", { panel = Panel.NONE }) {
-                    TBtn("MOUSE MODE: " + if (ctl.directTouch) "DIRECT TOUCH" else "TRACKPAD") {
-                        ctl.directTouch = !ctl.directTouch
-                        if (ctl.directTouch) ctl.panMode = false
+            when (sheet) {
+                Sheet.NONE -> Unit
+                Sheet.SETTINGS -> GlassSheet("Desktop settings", { sheet = Sheet.NONE }) {
+                    ToggleRow("Direct touch (cursor jumps to your finger)", ctl.directTouch) {
+                        ctl.directTouch = it
+                        if (it) ctl.panMode = false
                     }
-                    TBtn("ONE-FINGER DRAG PANS VIEW: " + if (ctl.panMode) "ON" else "OFF") {
-                        ctl.panMode = !ctl.panMode
-                        if (ctl.panMode) ctl.directTouch = false
+                    ToggleRow("One-finger drag pans the view", ctl.panMode) {
+                        ctl.panMode = it
+                        if (it) ctl.directTouch = false
                     }
-                    TBtn("SCALING: FIT") { ctl.fitToScreen() }
-                    TBtn("SCALING: 100%") { ctl.actualSize() }
-                    PLine("ZOOM: ${(ctl.zoom * 100).roundToInt()}%  (pinch to zoom)")
-                    TBtn("TOOLBAR PINNED: " + if (pinned) "YES" else "NO") { pinned = !pinned }
-                    TBtn("AUTO KEYBOARD ON TEXT: " + if (ctl.autoKeyboard) "ON" else "OFF") { ctl.autoKeyboard = !ctl.autoKeyboard }
-                    PLine("Opens when you tap while the pointer is an I-beam.")
+                    ToggleRow("Open keyboard when tapping text", ctl.autoKeyboard) { ctl.autoKeyboard = it }
+                    ToggleRow("Keep the toolbar visible", pinned) { pinned = it }
+                    GlassOption("Fit to screen") { ctl.fitToScreen() }
+                    GlassOption("Actual size (100%)") { ctl.actualSize() }
+                    GlassLine("Zoom: ${(ctl.zoom * 100).roundToInt()}%. Pinch to zoom.", muted = true)
                 }
-                Panel.RESOLUTION -> PanelBox("RESOLUTION", { panel = Panel.NONE }) {
-                    PLine("CURRENT: ${ctl.fbW}x${ctl.fbH}")
-                    PLine("Changing it restarts the desktop session.")
-                    TBtn("AUTO (SCREEN ASPECT)") { panel = Panel.NONE; vm.restartDesktop(0, 0) }
-                    TBtn("1280x720") { panel = Panel.NONE; vm.restartDesktop(1280, 720) }
-                    TBtn("1024x768") { panel = Panel.NONE; vm.restartDesktop(1024, 768) }
-                    TBtn("800x600") { panel = Panel.NONE; vm.restartDesktop(800, 600) }
+                Sheet.RESOLUTION -> GlassSheet("Resolution", { sheet = Sheet.NONE }) {
+                    GlassLine("Current: ${ctl.fbW} x ${ctl.fbH}")
+                    GlassLine("Changing it restarts the desktop session.", muted = true)
+                    GlassOption("Auto (match screen shape)") { sheet = Sheet.NONE; vm.restartDesktop(0, 0) }
+                    GlassOption("1280 x 720") { sheet = Sheet.NONE; vm.restartDesktop(1280, 720) }
+                    GlassOption("1024 x 768") { sheet = Sheet.NONE; vm.restartDesktop(1024, 768) }
+                    GlassOption("800 x 600") { sheet = Sheet.NONE; vm.restartDesktop(800, 600) }
                 }
-                Panel.INFO -> PanelBox("SESSION INFORMATION", { panel = Panel.NONE }) {
-                    PLine("SERVER: ${ctl.client.serverName}")
-                    PLine("ADDRESS: 127.0.0.1:${DesktopSession.PORT} (this device only)")
-                    PLine("AUTH: VNC password (random per installation)")
-                    PLine("FRAMEBUFFER: ${ctl.fbW}x${ctl.fbH}")
-                    PLine("ZOOM: ${(ctl.zoom * 100).roundToInt()}%")
-                    PLine(inputSummary())
+                Sheet.INFO -> GlassSheet("Session information", { sheet = Sheet.NONE }) {
+                    GlassLine("Server: ${ctl.client.serverName}")
+                    GlassLine("Address: 127.0.0.1:${DesktopSession.PORT} (this device only)")
+                    GlassLine("Protection: VNC password, random per installation")
+                    GlassLine("Screen: ${ctl.fbW} x ${ctl.fbH}")
+                    GlassLine("Zoom: ${(ctl.zoom * 100).roundToInt()}%")
+                    GlassLine(inputSummary())
                 }
-                Panel.EXIT -> PanelBox("EXIT DESKTOP", { panel = Panel.NONE }) {
-                    TBtn("DISCONNECT (DESKTOP KEEPS RUNNING)") { vm.exitViewer(false) }
-                    TBtn("STOP DESKTOP AND EXIT") { vm.exitViewer(true) }
+                Sheet.EXIT -> GlassSheet("Leave the desktop", { sheet = Sheet.NONE }) {
+                    AppButton("Disconnect, keep it running", { vm.exitViewer(false) }, Modifier.fillMaxWidth(), style = Btn.Tonal)
+                    AppButton("Stop the desktop and exit", { vm.exitViewer(true) }, Modifier.fillMaxWidth(), style = Btn.Danger)
                 }
             }
         }
@@ -574,15 +664,17 @@ fun ViewerScreen(vm: FirmwareViewModel) {
             Column(
                 Modifier
                     .align(Alignment.Center)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xEE300000))
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                    .widthIn(max = 420.dp)
+                    .padding(16.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(Color(0xF2401414))
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text("DESKTOP DISCONNECTED", color = Color.White, fontFamily = FontFamily.Monospace)
-                ctl.closedReason?.let { PLine(it) }
-                TBtn("RECONNECT") { vm.reconnect() }
-                TBtn("EXIT") { vm.exitViewer(false) }
+                Text("Desktop disconnected", color = Ink, style = MaterialTheme.typography.titleMedium)
+                ctl.closedReason?.let { GlassLine(it, muted = true) }
+                AppButton("Reconnect", { vm.reconnect() }, Modifier.fillMaxWidth())
+                AppButton("Exit", { vm.exitViewer(false) }, Modifier.fillMaxWidth(), style = Btn.Outlined)
             }
         }
     }
