@@ -18,7 +18,12 @@ enum class ModState { OFF, ONCE, LOCKED }
  * Holds what the viewer shows and does: the framebuffer bitmap, zoom and pan, a trackpad
  * style cursor, mouse buttons and latched modifier keys. Input is forwarded to [client].
  */
-class ViewerController(val client: RfbClient) : RfbClient.Listener {
+class ViewerController(
+    val client: RfbClient,
+    /** Pointer shapes the user taught us are the text pointer (hashes from [CursorShape.hash]). */
+    val learned: MutableSet<Int> = java.util.concurrent.ConcurrentHashMap.newKeySet(),
+    private val onLearn: (Set<Int>) -> Unit = {},
+) : RfbClient.Listener {
     var frame by mutableIntStateOf(0)
         private set
     var fbW by mutableIntStateOf(client.width)
@@ -46,6 +51,29 @@ class ViewerController(val client: RfbClient) : RfbClient.Listener {
 
     /** Open the on-screen keyboard when tapping while the pointer is an I-beam. */
     var autoKeyboard by mutableStateOf(true)
+
+    /** ASCII picture of the last pointer shape the server sent, to diagnose text detection. */
+    var cursorArt by mutableStateOf("")
+        private set
+
+    /** How many pointer shapes the server has sent (0 means it never sends them). */
+    var cursorSeen by mutableIntStateOf(0)
+        private set
+
+    private var lastShapeHash = 0
+
+    /** The user says the pointer currently shown is the text pointer: remember it. */
+    fun learnCurrentPointer() {
+        if (cursorSeen == 0) return
+        learned.add(lastShapeHash)
+        onLearn(learned)
+        textCursor = true
+    }
+
+    fun forgetLearnedPointers() {
+        learned.clear()
+        onLearn(learned)
+    }
 
     /** false = trackpad (cursor offset from the finger), true = the cursor jumps to the touch. */
     var directTouch by mutableStateOf(false)
@@ -240,8 +268,14 @@ class ViewerController(val client: RfbClient) : RfbClient.Listener {
         frame++
     }
 
+    override fun onCursorShape(w: Int, h: Int, mask: BooleanArray) {
+        lastShapeHash = CursorShape.hash(mask, w, h)
+        cursorArt = CursorShape.art(mask, w, h)
+        cursorSeen++
+    }
+
     override fun onCursor(isText: Boolean) {
-        textCursor = isText
+        textCursor = isText || lastShapeHash in learned
     }
 
     override fun onClosed(reason: String?) {
