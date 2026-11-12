@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -73,6 +75,7 @@ import androidx.compose.ui.input.pointer.isTertiaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
@@ -458,6 +461,22 @@ fun ViewerScreen(vm: FirmwareViewModel) {
     val keyboardController = LocalSoftwareKeyboardController.current
 
     LaunchedEffect(Unit) { rootFocus.requestFocus() }
+
+    // Keep our state in step with the real keyboard: if it is dismissed (for example with Back),
+    // the next tap on a keyboard button opens it again instead of "closing" one that is already hidden.
+    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+    var imeWasVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(imeBottom) {
+        if (imeBottom > 0) {
+            imeWasVisible = true
+        } else if (imeWasVisible) {
+            imeWasVisible = false
+            if (softKeyboard) {
+                softKeyboard = false
+                autoOpened = false
+            }
+        }
+    }
     LaunchedEffect(touchTick, pinned, toolbarVisible, sheet, showKeyboard) {
         if (toolbarVisible && !pinned && sheet == Sheet.NONE && !showKeyboard) {
             delay(4000)
@@ -556,15 +575,44 @@ fun ViewerScreen(vm: FirmwareViewModel) {
         }
 
         if (!toolbarVisible) {
-            Box(
+            Row(
                 Modifier
                     .align(Alignment.TopCenter)
                     .padding(top = 6.dp)
-                    .size(56.dp, 6.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(Color(0x99FFFFFF))
-                    .clickable { toolbarVisible = true; touchTick++ },
-            )
+                    .clip(RoundedCornerShape(50))
+                    .background(Glass)
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // The long handle: tap it to bring the toolbar back.
+                Box(
+                    Modifier
+                        .height(36.dp)
+                        .widthIn(min = 56.dp)
+                        .clip(RoundedCornerShape(50))
+                        .clickable { toolbarVisible = true; touchTick++ },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(Modifier.size(32.dp, 4.dp).clip(RoundedCornerShape(2.dp)).background(Muted))
+                }
+                // Quick keyboard: opens or closes the Android keyboard without opening the toolbar.
+                Box(
+                    Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(if (softKeyboard) Accent else Color.Transparent)
+                        .clickable {
+                            softKeyboard = !softKeyboard
+                            autoOpened = false
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Ico(
+                        R.drawable.ic_keyboard, size = 20.dp,
+                        tint = if (softKeyboard) OnAccent else Ink, description = "Keyboard",
+                    )
+                }
+            }
         } else {
             Row(
                 Modifier
@@ -594,7 +642,12 @@ fun ViewerScreen(vm: FirmwareViewModel) {
                 if (minimized) {
                     GlassBtn(R.drawable.ic_plus, "Expand toolbar") { minimized = false; touchTick++ }
                 } else {
-                    GlassBtn(R.drawable.ic_keyboard, "Keyboard", showKeyboard) { showKeyboard = !showKeyboard; touchTick++ }
+                    GlassBtn(R.drawable.ic_keyboard, "Keyboard", softKeyboard) {
+                        softKeyboard = !softKeyboard
+                        autoOpened = false
+                        touchTick++
+                    }
+                    GlassBtn(R.drawable.ic_keys, "Special keys", showKeyboard) { showKeyboard = !showKeyboard; touchTick++ }
                     GlassBtn(
                         when {
                             ctl.directTouch -> R.drawable.ic_pointer
