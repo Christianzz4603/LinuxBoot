@@ -75,6 +75,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
@@ -465,7 +466,12 @@ fun ViewerScreen(vm: FirmwareViewModel) {
     }
     LaunchedEffect(softKeyboard) {
         if (softKeyboard) {
-            softFocus.requestFocus()
+            delay(60) // let the hidden text field attach before focusing it
+            try {
+                softFocus.requestFocus()
+            } catch (e: IllegalStateException) {
+                // not attached yet; show() below still works once it is
+            }
             keyboardController?.show()
         } else {
             keyboardController?.hide()
@@ -636,6 +642,19 @@ fun ViewerScreen(vm: FirmwareViewModel) {
                     GlassOption("Fit to screen") { ctl.fitToScreen() }
                     GlassOption("Actual size (100%)") { ctl.actualSize() }
                     GlassLine("Zoom: ${(ctl.zoom * 100).roundToInt()}%. Pinch to zoom.", muted = true)
+                    GlassLine(
+                        "Pointer: " + when {
+                            ctl.cursorSeen == 0 -> "the server has not sent a pointer shape yet"
+                            ctl.textCursor -> "text (the keyboard opens when you tap)"
+                            else -> "not text"
+                        },
+                        muted = true,
+                    )
+                    if (ctl.cursorArt.isNotEmpty()) {
+                        Text(ctl.cursorArt, color = Ink, fontFamily = FontFamily.Monospace, fontSize = 7.sp, lineHeight = 8.sp)
+                    }
+                    GlassOption("Remember the current pointer as text") { ctl.learnCurrentPointer() }
+                    GlassOption("Forget remembered pointers") { ctl.forgetLearnedPointers() }
                 }
                 Sheet.RESOLUTION -> GlassSheet("Resolution", { sheet = Sheet.NONE }) {
                     GlassLine("Current: ${ctl.fbW} x ${ctl.fbH}")
