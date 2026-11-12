@@ -275,13 +275,23 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Half the screen's pixels in each direction. The viewer then shows it at exactly 2x, so every
+     * desktop pixel becomes a crisp 2x2 block instead of being smeared by non-integer scaling.
+     */
     private fun autoGeometry(): Pair<Int, Int> {
         val dm = getApplication<Application>().resources.displayMetrics
         val long = max(dm.widthPixels, dm.heightPixels)
         val short = min(dm.widthPixels, dm.heightPixels)
-        val w = min(1280, long) and 1.inv()
-        val h = (w * short / long) and 1.inv()
-        return w to h
+        return ((long / 2) and 1.inv()) to ((short / 2) and 1.inv())
+    }
+
+    /** One desktop pixel per screen pixel: sharpest, but the interface is small and it is heavier to run. */
+    private fun nativeGeometry(): Pair<Int, Int> {
+        val dm = getApplication<Application>().resources.displayMetrics
+        val long = max(dm.widthPixels, dm.heightPixels)
+        val short = min(dm.widthPixels, dm.heightPixels)
+        return (long and 1.inv()) to (short and 1.inv())
     }
 
     /** Starts the desktop (if needed), connects the embedded viewer and opens it. */
@@ -301,7 +311,11 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
             desktopStatus = listOf(msg)
             return
         }
-        val (w, h) = if (width > 0 && height > 0) width to height else autoGeometry()
+        val (w, h) = when {
+            width > 0 && height > 0 -> width to height
+            width == -1 -> nativeGeometry()
+            else -> autoGeometry()
+        }
         desktopBusy = "STARTING DESKTOP"
         desktopStatus = emptyList()
         desktopJob = viewModelScope.launch {
