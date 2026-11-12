@@ -48,7 +48,7 @@ That storage is usually FUSE-backed and often lacks symlinks and permission bits
 
 ## Known limits
 
-- Auto-keyboard in the desktop viewer works from the pointer shape (VNC does not report keyboard focus): tapping while the pointer is an I-beam opens the keyboard, tapping elsewhere closes it if it was opened that way. It will not open for a field that is focused but not under the pointer, and it also triggers over read-only text. The shape recognition is a heuristic checked against synthetic cursors, not every cursor theme. It can be switched off in the desktop settings.
+- Auto-keyboard in the desktop viewer works from the pointer shape (VNC does not report keyboard focus): tapping while the pointer is an I-beam opens the keyboard, tapping elsewhere closes it if it was opened that way. It will not open for a field that is focused but not under the pointer, and it also triggers over read-only text. Recognition is a heuristic tested on synthetic shapes. If your theme's I-beam is missed, open the desktop settings, put the pointer over a text field, and tap "Remember the current pointer as text"; the settings also show a picture of the pointer shape the server sent. It can be switched off in the same place.
 
 - This PRoot build (5.1.0-mod-0.15) has no `--sysvipc`, and Android blocks SysV shared memory, so the X server runs with MIT-SHM disabled (slower drawing, but no crashes from blocked syscalls).
 - Stopping a session relies on `--kill-on-exit`; if a desktop was left running, stop it from the distribution screen before removing or backing it up.
