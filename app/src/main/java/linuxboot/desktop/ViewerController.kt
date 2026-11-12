@@ -90,6 +90,21 @@ class ViewerController(
     var lastTapCount = 0
 
     private var buttons = 0
+
+    /** Height in pixels covered at the bottom by an on-screen keyboard. */
+    private var bottomInset = 0f
+
+    /**
+     * Called when a keyboard appears or disappears. The zoom is left alone; the desktop is panned so the
+     * pointer (where you are typing) stays visible above the keyboard, and returns when it closes.
+     */
+    fun setBottomInset(px: Float) {
+        val p = max(0f, px)
+        if (abs(p - bottomInset) < 1f) return
+        bottomInset = p
+        clampPan()
+        if (p > 0f) keepCursorVisible()
+    }
     private var viewW = 1f
     private var viewH = 1f
     private val bmpLock = Any()
@@ -125,7 +140,8 @@ class ViewerController(
         val mx = max(0f, (fbW * s - viewW) / 2f)
         val my = max(0f, (fbH * s - viewH) / 2f)
         panX = panX.coerceIn(-mx, mx)
-        panY = panY.coerceIn(-my, my)
+        // While a keyboard covers the bottom of the screen the desktop may slide up by that much.
+        panY = panY.coerceIn(-(my + bottomInset), my)
     }
 
     fun panBy(d: Offset) {
@@ -165,7 +181,8 @@ class ViewerController(
         val sy = baseY + cursorY * s
         val m = 24f
         if (sx < m) panX += m - sx else if (sx > viewW - m) panX -= sx - (viewW - m)
-        if (sy < m) panY += m - sy else if (sy > viewH - m) panY -= sy - (viewH - m)
+        val bottomLimit = viewH - bottomInset - 2 * m
+        if (sy < m) panY += m - sy else if (sy > bottomLimit) panY -= sy - bottomLimit
         clampPan()
     }
 
