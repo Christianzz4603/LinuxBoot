@@ -48,6 +48,8 @@ That storage is usually FUSE-backed and often lacks symlinks and permission bits
 
 ## Known limits
 
+- Picture sharpness: the desktop is created at half your screen's resolution and drawn at exactly 2x with no smoothing, so pixels are crisp blocks rather than blurred. "Native" in the resolution sheet gives one desktop pixel per screen pixel (sharpest, but small and heavier). "Smooth scaling" in the desktop settings turns interpolation back on.
+
 - Auto-keyboard in the desktop viewer works from the pointer shape (VNC does not report keyboard focus): tapping while the pointer is an I-beam opens the keyboard, tapping elsewhere closes it if it was opened that way. It will not open for a field that is focused but not under the pointer, and it also triggers over read-only text. Recognition is a heuristic tested on synthetic shapes. If your theme's I-beam is missed, open the desktop settings, put the pointer over a text field, and tap "Remember the current pointer as text"; the settings also show a picture of the pointer shape the server sent. It can be switched off in the same place.
 
 - This PRoot build (5.1.0-mod-0.15) has no `--sysvipc`, and Android blocks SysV shared memory, so the X server runs with MIT-SHM disabled (slower drawing, but no crashes from blocked syscalls).
