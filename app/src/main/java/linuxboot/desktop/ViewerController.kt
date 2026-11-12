@@ -52,6 +52,9 @@ class ViewerController(
     /** Open the on-screen keyboard when tapping while the pointer is an I-beam. */
     var autoKeyboard by mutableStateOf(true)
 
+    /** Bilinear smoothing when the picture is enlarged. Off by default: crisp pixels beat a blurry picture. */
+    var smoothScaling by mutableStateOf(false)
+
     /** ASCII picture of the last pointer shape the server sent, to diagnose text detection. */
     var cursorArt by mutableStateOf("")
         private set
@@ -94,8 +97,18 @@ class ViewerController(
 
     // ---- geometry -------------------------------------------------------------------------
 
+    /**
+     * Fit-to-screen scale. When it is within 6% of a whole number it snaps to that number: integer
+     * scaling keeps every desktop pixel the same size, which is what makes text and icons crisp.
+     * (The few pixels this can push past the edge are reachable by panning.)
+     */
     private val fit: Float
-        get() = if (fbW == 0 || fbH == 0) 1f else min(viewW / fbW, viewH / fbH)
+        get() {
+            if (fbW == 0 || fbH == 0) return 1f
+            val raw = min(viewW / fbW, viewH / fbH)
+            val n = Math.round(raw)
+            return if (n >= 1 && abs(raw - n) / n < 0.06f) n.toFloat() else raw
+        }
 
     val scale: Float get() = fit * zoom
     val baseX: Float get() = (viewW - fbW * scale) / 2f + panX
