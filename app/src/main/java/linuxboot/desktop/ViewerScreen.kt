@@ -522,13 +522,20 @@ fun ViewerScreen(vm: FirmwareViewModel) {
         ) {
             ctl.frame // subscribe to framebuffer changes
             val s = ctl.scale
-            val bx = ctl.baseX
-            val by = ctl.baseY
+            // Whole-pixel position and no bilinear enlargement: fractional offsets and interpolation
+            // are what make a remote desktop look blurry.
+            val bx = ctl.baseX.roundToInt().toFloat()
+            val by = ctl.baseY.roundToInt().toFloat()
+            val quality = when {
+                ctl.smoothScaling -> FilterQuality.Low
+                s >= 1f -> FilterQuality.None
+                else -> FilterQuality.Medium
+            }
             ctl.withBitmap { bmp ->
                 if (bmp != null) {
                     translate(bx, by) {
                         scale(s, s, pivot = Offset.Zero) {
-                            drawImage(bmp.asImageBitmap(), filterQuality = FilterQuality.Low)
+                            drawImage(bmp.asImageBitmap(), filterQuality = quality)
                         }
                     }
                 }
@@ -692,6 +699,7 @@ fun ViewerScreen(vm: FirmwareViewModel) {
                     }
                     ToggleRow("Open keyboard when tapping text", ctl.autoKeyboard) { ctl.autoKeyboard = it }
                     ToggleRow("Keep the toolbar visible", pinned) { pinned = it }
+                    ToggleRow("Smooth scaling (softer picture)", ctl.smoothScaling) { ctl.smoothScaling = it }
                     GlassOption("Fit to screen") { ctl.fitToScreen() }
                     GlassOption("Actual size (100%)") { ctl.actualSize() }
                     GlassLine("Zoom: ${(ctl.zoom * 100).roundToInt()}%. Pinch to zoom.", muted = true)
@@ -712,7 +720,8 @@ fun ViewerScreen(vm: FirmwareViewModel) {
                 Sheet.RESOLUTION -> GlassSheet("Resolution", { sheet = Sheet.NONE }) {
                     GlassLine("Current: ${ctl.fbW} x ${ctl.fbH}")
                     GlassLine("Changing it restarts the desktop session.", muted = true)
-                    GlassOption("Auto (match screen shape)") { sheet = Sheet.NONE; vm.restartDesktop(0, 0) }
+                    GlassOption("Sharp 2x (half the screen resolution)") { sheet = Sheet.NONE; vm.restartDesktop(0, 0) }
+                    GlassOption("Native (full resolution, small interface)") { sheet = Sheet.NONE; vm.restartDesktop(-1, -1) }
                     GlassOption("1280 x 720") { sheet = Sheet.NONE; vm.restartDesktop(1280, 720) }
                     GlassOption("1024 x 768") { sheet = Sheet.NONE; vm.restartDesktop(1024, 768) }
                     GlassOption("800 x 600") { sheet = Sheet.NONE; vm.restartDesktop(800, 600) }
