@@ -312,7 +312,12 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 val c = RfbClient("127.0.0.1", DesktopSession.PORT, password)
                 withContext(Dispatchers.IO) { c.connect() }
-                val ctl = ViewerController(c)
+                val prefs = getApplication<Application>().getSharedPreferences("viewer", android.content.Context.MODE_PRIVATE)
+                val learned = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+                prefs.getStringSet("text_pointers", emptySet())?.forEach { s -> s.toIntOrNull()?.let { learned.add(it) } }
+                val ctl = ViewerController(c, learned) { set ->
+                    prefs.edit().putStringSet("text_pointers", set.map { it.toString() }.toSet()).apply()
+                }
                 c.start(ctl)
                 client = c
                 viewer = ctl
