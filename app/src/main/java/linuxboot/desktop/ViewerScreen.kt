@@ -440,6 +440,7 @@ fun ViewerScreen(vm: FirmwareViewModel) {
     var softKeyboard by remember { mutableStateOf(false) }
     var autoOpened by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf(Sheet.NONE) }
+    var panelPx by remember { mutableIntStateOf(0) }
     val rootFocus = remember { FocusRequester() }
 
     // VNC does not report keyboard focus, but the pointer turns into an I-beam over text.
@@ -466,6 +467,12 @@ fun ViewerScreen(vm: FirmwareViewModel) {
     // the next tap on a keyboard button opens it again instead of "closing" one that is already hidden.
     val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
     var imeWasVisible by remember { mutableStateOf(false) }
+    // Keep the zoom as it is while a keyboard is up: instead of shrinking the desktop to fit what is
+    // left of the screen, pan it so the pointer (where you are typing) stays visible above the keyboard.
+    LaunchedEffect(imeBottom, panelPx, showKeyboard) {
+        ctl.setBottomInset((imeBottom + if (showKeyboard) panelPx else 0).toFloat())
+    }
+
     LaunchedEffect(imeBottom) {
         if (imeBottom > 0) {
             imeWasVisible = true
@@ -508,7 +515,6 @@ fun ViewerScreen(vm: FirmwareViewModel) {
             .fillMaxSize()
             .background(Color.Black)
             .displayCutoutPadding()
-            .imePadding()
             .focusRequester(rootFocus)
             .focusable()
             .onPreviewKeyEvent { forwardKey(ctl, it) },
@@ -577,7 +583,10 @@ fun ViewerScreen(vm: FirmwareViewModel) {
                     softKeyboard = !softKeyboard
                     autoOpened = false
                 },
-                modifier = Modifier.align(Alignment.BottomCenter),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .imePadding()
+                    .onSizeChanged { panelPx = it.height },
             )
         }
 
