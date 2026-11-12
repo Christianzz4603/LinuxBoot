@@ -25,6 +25,9 @@ class RfbClient(private val host: String, private val port: Int, private val pas
 
         /** The server changed the pointer shape; [isText] is true for an I-beam (text) cursor. */
         fun onCursor(isText: Boolean) {}
+
+        /** The pointer shape itself (mask only), called just before [onCursor]. */
+        fun onCursorShape(w: Int, h: Int, mask: BooleanArray) {}
     }
 
     @Volatile
@@ -242,6 +245,7 @@ class RfbClient(private val host: String, private val port: Int, private val pas
                 bits[y * w + x] = (mask[y * maskStride + (x shr 3)].toInt() and (0x80 shr (x and 7))) != 0
             }
         }
+        listener.onCursorShape(w, h, bits)
         listener.onCursor(CursorShape.isTextCursor(bits, w, h))
     }
 
