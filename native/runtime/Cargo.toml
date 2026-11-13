@@ -17,6 +17,15 @@ jni = "0.21"
 tempfile = "3"
 
 [profile.release]
-opt-level = "s"
-lto = true
-strip = true
+# Speed first: this code hashes, decompresses and unpacks hundreds of megabytes on a phone.
+opt-level = 3
+# Whole-program optimisation across the crate and its C dependency boundary, one codegen unit.
+lto = "fat"
+codegen-units = 1
+# Keep unwinding: the JNI entry points catch panics and report them as errors. With abort, any
+# bug would take the whole app down instead.
+panic = "unwind"
+strip = "symbols"
+debug = false
+incremental = false
+overflow-checks = false
