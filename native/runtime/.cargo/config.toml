@@ -1,0 +1,9 @@
+# Applies to every Android target (arm64, armv7, x86_64, x86).
+[target.'cfg(target_os = "android")']
+rustflags = [
+    # Android 15+ devices can use 16 KB memory pages; native libraries must be aligned to match.
+    "-C", "link-arg=-Wl,-z,max-page-size=16384",
+    # Merge identical functions and drop unused sections: smaller library, better cache use.
+    "-C", "link-arg=-Wl,--icf=all",
+    "-C", "link-arg=-Wl,--gc-sections",
+]
