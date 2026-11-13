@@ -1,0 +1,80 @@
+name: Build PRoot
+
+# Builds a static PRoot (talloc linked in, unbundled loader) for all four Android CPU types from a
+# pinned, signed commit of the upstream recipe, using the NDK version that recipe was written for.
+# PRoot itself is fetched by upstream's get-proot.sh at tag v0.15_release.
+# talloc 2.1.14 bundles a Python 2 waf and PRoot's loader step needs gawk's strtonum, so the build
+# runs in an Ubuntu 20.04 container. The result is cached: upstream mirrors occasionally return 503,
+# and a cache hit skips the network entirely. Bump the "-vN" suffix of the key to force a rebuild.
+
+on:
+  workflow_call:
+
+jobs:
+  proot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: green-green-avk/build-proot-android
+          ref: 01f83b8841358450c78333d1b33ab30d4943bec4
+      - name: Restore previously built PRoot
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: out
+          key: proot-android-4abi-01f83b88-ndk23.2.8568313-v1
+      - name: Install NDK 23.2.8568313
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;23.2.8568313"
+      - name: Build PRoot for arm64, armv7, x86_64 and x86 (retried)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          NDK="$ANDROID_HOME/ndk/23.2.8568313"
+          sed -i "s|^NDK=.*|NDK=\"$NDK\"|" config
+          sed -i "s|^ARCHS=.*|ARCHS='aarch64 armv7a x86_64 i686'|" config
+          ok=0
+          for attempt in 1 2 3; do
+            sudo rm -rf build
+            if docker run --rm -e HUID="$(id -u)" -e HGID="$(id -g)" \
+              -v "$PWD":/work -v "$NDK":"$NDK":ro -w /work ubuntu:20.04 bash -ec '
+                export DEBIAN_FRONTEND=noninteractive
+                apt-get update
+                apt-get install -y --no-install-recommends python2 gawk build-essential wget ca-certificates
+                ln -sf /usr/bin/python2 /usr/local/bin/python
+                ./get-talloc.sh
+                ./get-proot.sh
+                ./make-talloc-static.sh
+                ./make-proot-for-apk.sh
+                chown -R "$HUID:$HGID" /work
+              '; then
+              ok=1
+              break
+            fi
+            echo "PRoot build attempt $attempt failed; retrying in 30s"
+            sleep 30
+          done
+          [ "$ok" = 1 ]
+      - name: Collect jniLibs
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          for pair in aarch64:arm64-v8a armv7a:armeabi-v7a x86_64:x86_64 i686:x86; do
+            a="${pair%%:*}"
+            abi="${pair##*:}"
+            mkdir -p "out/$abi"
+            cp build/root-"$a"/root-apk/bin/lib*.so "out/$abi/"
+          done
+      - name: Require PRoot and its loader for every CPU type
+        run: |
+          for abi in arm64-v8a armeabi-v7a x86_64 x86; do
+            for f in libproot.so libproot-loader.so; do
+              test -f "out/$abi/$f" || { echo "::error::missing out/$abi/$f"; exit 1; }
+            done
+          done
+          find out -type f | sort
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proot-android
+          path: out
