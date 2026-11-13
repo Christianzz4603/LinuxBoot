@@ -4,6 +4,11 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// The CPU types LinuxBoot runs on: 64-bit and 32-bit ARM, and 64-bit and 32-bit x86.
+val abis = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+// -PrustAbis=arm64-v8a builds only one Rust target (faster local builds).
+val rustAbis = (findProperty("rustAbis") as String?)?.split(",")?.map { it.trim() } ?: abis
+
 android {
     namespace = "linuxboot"
     compileSdk = 35
@@ -12,16 +17,41 @@ android {
         applicationId = "io.github.christianzz4603.linuxboot"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
-        ndk { abiFilters += "arm64-v8a" }
+        versionCode = (findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
+        versionName = (findProperty("versionName") as String?) ?: "0.1.0-dev"
+        // No ndk.abiFilters: it cannot be combined with ABI splits. jniLibs only ever holds the four ABIs above.
+    }
+
+    // Release signing comes from the environment (CI repository secrets); never from files in the repo.
+    val keystorePath = System.getenv("ALPHA_KEYSTORE_FILE")
+    signingConfigs {
+        if (keystorePath != null) {
+            create("alpha") {
+                storeFile = file(keystorePath)
+                storeType = "pkcs12"
+                storePassword = System.getenv("ALPHA_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ALPHA_KEY_ALIAS")
+                keyPassword = System.getenv("ALPHA_KEYSTORE_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.findByName("alpha") ?: signingConfigs.getByName("debug")
+        }
+    }
+
+    // One APK per CPU type plus a universal one, when built with -PsplitAbi (the release workflow).
+    splits {
+        abi {
+            isEnable = project.hasProperty("splitAbi")
+            reset()
+            include(*abis.toTypedArray())
+            isUniversalApk = true
         }
     }
 
@@ -29,7 +59,10 @@ android {
     // nativeLibraryDir to be executable, so native libs have to be extracted at install.
     packaging {
         jniLibs { useLegacyPackaging = true }
+        resources { excludes += listOf("/META-INF/{AL2.0,LGPL2.1}", "/META-INF/*.version", "DebugProbesKt.bin") }
     }
+
+    androidResources { localeFilters += listOf("en") }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -39,14 +72,17 @@ android {
     buildFeatures { compose = true }
 }
 
-// Cross-compiles the Rust runtime with cargo-ndk into src/main/jniLibs.
-// Requires: rustup target aarch64-linux-android, cargo-ndk, ANDROID_NDK_HOME.
+// Cross-compiles the Rust runtime with cargo-ndk into src/main/jniLibs for every ABI.
+// Requires: the four rustup android targets, cargo-ndk, ANDROID_NDK_HOME.
 // Pass -PskipRust to build the UI without it (the app then reports the runtime as missing).
 val buildRust = tasks.register<Exec>("buildRust") {
-    description = "Builds the Rust runtime for arm64-v8a"
+    description = "Builds the Rust runtime for ${rustAbis.joinToString()}"
     onlyIf { !project.hasProperty("skipRust") }
     workingDir = file("../native/runtime")
-    commandLine("cargo", "ndk", "-t", "arm64-v8a", "-o", "$projectDir/src/main/jniLibs", "build", "--release")
+    commandLine(
+        listOf("cargo", "ndk") + rustAbis.flatMap { listOf("-t", it) } +
+            listOf("-o", "$projectDir/src/main/jniLibs", "build", "--release"),
+    )
 }
 tasks.configureEach { if (name == "preBuild") dependsOn(buildRust) }
 
