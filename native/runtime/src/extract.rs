@@ -1,5 +1,6 @@
 use std::fs;
-use std::io::{self, Read};
+use std::collections::HashSet;
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
@@ -59,6 +60,23 @@ fn reject_symlink_ancestors(root: &Path, dest: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Same check as [`reject_symlink_ancestors`], but remembers directories already proven safe.
+/// Entries arrive grouped by directory, so most checks become a set lookup instead of a stat per
+/// path component. Sound because directories are never removed during extraction and a path that
+/// exists as a directory cannot later be replaced by a symlink (creating it would fail).
+fn check_ancestors(root: &Path, dest: &Path, validated: &mut HashSet<PathBuf>) -> io::Result<()> {
+    let parent = match dest.parent() {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+    if validated.contains(parent) {
+        return Ok(());
+    }
+    reject_symlink_ancestors(root, dest)?;
+    validated.insert(parent.to_path_buf());
+    Ok(())
+}
+
 fn set_mode(path: &Path, mode: u32, floor: u32) -> io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode((mode & 0o1777) | floor))
 }
@@ -108,6 +126,7 @@ pub fn extract<R: Read>(reader: R, root: &Path) -> io::Result<Report> {
     ctx(fs::create_dir_all(root), "create", root)?;
     let mut archive = Archive::new(reader);
     let mut rep = Report::default();
+    let mut validated: HashSet<PathBuf> = HashSet::new();
 
     for entry in archive.entries()? {
         let mut entry = entry?;
@@ -116,7 +135,7 @@ pub fn extract<R: Read>(reader: R, root: &Path) -> io::Result<Report> {
         if dest == root {
             continue;
         }
-        reject_symlink_ancestors(root, &dest)?;
+        check_ancestors(root, &dest, &mut validated)?;
 
         let mode = entry.header().mode().unwrap_or(0o644);
         match entry.header().entry_type() {
@@ -127,9 +146,12 @@ pub fn extract<R: Read>(reader: R, root: &Path) -> io::Result<Report> {
             }
             EntryType::Regular | EntryType::Continuous => {
                 ctx(prepare(&dest), "prepare", &dest)?;
-                let mut f = ctx(fs::File::create(&dest), "create", &dest)?;
-                ctx(io::copy(&mut entry, &mut f), "write", &dest)?;
-                drop(f);
+                let f = ctx(fs::File::create(&dest), "create", &dest)?;
+                // A large buffer turns many small writes into a few big ones.
+                let mut w = BufWriter::with_capacity(256 * 1024, f);
+                ctx(io::copy(&mut entry, &mut w), "write", &dest)?;
+                ctx(w.flush(), "write", &dest)?;
+                drop(w);
                 ctx(set_mode(&dest, mode, 0o600), "chmod", &dest)?;
                 rep.files += 1;
             }
@@ -148,7 +170,7 @@ pub fn extract<R: Read>(reader: R, root: &Path) -> io::Result<Report> {
                     .ok_or_else(|| bad(format!("hardlink without target: {}", rel.display())))?
                     .into_owned();
                 let src = safe_join(root, &target)?;
-                reject_symlink_ancestors(root, &src)?;
+                check_ancestors(root, &src, &mut validated)?;
                 ctx(prepare(&dest), "prepare", &dest)?;
                 match link_or_copy(&src, &dest, |a, b| fs::hard_link(a, b)) {
                     Ok(LinkKind::Linked) => rep.hardlinks += 1,
@@ -167,12 +189,13 @@ pub fn extract<R: Read>(reader: R, root: &Path) -> io::Result<Report> {
 
 /// Extracts a `.tar.xz`, `.tar.gz`/`.tgz` or `.tar` file into `root`.
 pub fn extract_file(archive: &Path, root: &Path) -> io::Result<Report> {
-    let f = fs::File::open(archive)?;
+    // 1 MiB reads keep the decompressor fed instead of issuing many 8 KiB reads.
+    let f = BufReader::with_capacity(1 << 20, fs::File::open(archive)?);
     let name = archive.file_name().and_then(|n| n.to_str()).unwrap_or("");
     if name.ends_with(".tar.xz") {
-        extract(xz2::read::XzDecoder::new(f), root)
+        extract(xz2::bufread::XzDecoder::new(f), root)
     } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
-        extract(flate2::read::GzDecoder::new(f), root)
+        extract(flate2::bufread::GzDecoder::new(f), root)
     } else if name.ends_with(".tar") {
         extract(f, root)
     } else {
@@ -281,6 +304,33 @@ mod tests {
         fs::write(&f, b"x").unwrap();
         set_mode(&f, 0o6755, 0o600).unwrap();
         assert_eq!(fs::metadata(&f).unwrap().permissions().mode() & 0o7000, 0);
+    }
+
+    #[test]
+    fn cached_directories_do_not_hide_a_later_symlink_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        let mut b = Builder::new(Vec::new());
+        raw(&mut b, "d/a", b"1", EntryType::Regular, None);
+        raw(&mut b, "d/b", b"2", EntryType::Regular, None);
+        raw(&mut b, "d/s", b"", EntryType::Symlink, Some("/tmp"));
+        raw(&mut b, "d/s/pwned", b"x", EntryType::Regular, None);
+        let err = extract(Cursor::new(b.into_inner().unwrap()), &root).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(fs::read(root.join("d/a")).unwrap(), b"1");
+    }
+
+    #[test]
+    fn many_files_in_one_directory_extract() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        let mut b = Builder::new(Vec::new());
+        for i in 0..200 {
+            raw(&mut b, &format!("etc/conf.d/f{}", i), b"x", EntryType::Regular, None);
+        }
+        let rep = extract(Cursor::new(b.into_inner().unwrap()), &root).unwrap();
+        assert_eq!(rep.files, 200);
+        assert_eq!(fs::read(root.join("etc/conf.d/f199")).unwrap(), b"x");
     }
 
     #[test]
