@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use tar::{Builder, EntryType, Header};
@@ -18,7 +18,15 @@ pub fn create_tar_xz(root: &Path, out: &Path) -> io::Result<Report> {
 
     let result = (|| -> io::Result<Report> {
         let file = fs::File::create(&part)?;
-        let mut builder = Builder::new(XzEncoder::new(file, 3));
+        // liblzma's multi-threaded encoder: backups use every core the phone offers.
+        let threads = std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(1).min(8);
+        let stream = xz2::stream::MtStreamBuilder::new()
+            .threads(threads)
+            .preset(3)
+            .check(xz2::stream::Check::Crc64)
+            .encoder()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let mut builder = Builder::new(XzEncoder::new_stream(BufWriter::with_capacity(1 << 20, file), stream));
         builder.follow_symlinks(false);
         let mut rep = Report::default();
         walk(&mut builder, root, Path::new(""), &mut rep)?;
