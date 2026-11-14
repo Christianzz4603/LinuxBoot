@@ -119,6 +119,9 @@ class RfbClient(private val host: String, private val port: Int, private val pas
         val name = ByteArray(nameLen)
         input.readFully(name)
         serverName = String(name, Charsets.UTF_8)
+        if (width <= 0 || height <= 0 || width.toLong() * height > MAX_PIXELS) {
+            throw RfbException("Unreasonable desktop size ${width}x$height")
+        }
         pixels = IntArray(width * height)
 
         synchronized(writeLock) {
@@ -212,7 +215,7 @@ class RfbClient(private val host: String, private val port: Int, private val pas
                     listener.onUpdate(x, y, w, h)
                 }
                 -223 -> {
-                    if (w <= 0 || h <= 0 || w.toLong() * h > 64L * 1024 * 1024) throw RfbException("Bad desktop size ${w}x$h")
+                    if (w <= 0 || h <= 0 || w.toLong() * h > MAX_PIXELS) throw RfbException("Bad desktop size ${w}x$h")
                     pixels = IntArray(w * h)
                     width = w
                     height = h
@@ -255,18 +258,16 @@ class RfbClient(private val host: String, private val port: Int, private val pas
 
     private fun readRaw(x: Int, y: Int, w: Int, h: Int) {
         val row = ByteArray(w * 4)
+        // The server sends B,G,R,pad per pixel; read as a little-endian int that is already 0x00RRGGBB.
+        // One bulk copy plus an alpha pass replaces a per-byte conversion loop (the hot path of every frame).
+        val ints = java.nio.ByteBuffer.wrap(row).order(java.nio.ByteOrder.LITTLE_ENDIAN).asIntBuffer()
         val px = pixels
         for (r in 0 until h) {
             input.readFully(row)
-            var o = (y + r) * width + x
-            var i = 0
-            for (c in 0 until w) {
-                val b = row[i].toInt() and 0xFF
-                val g = row[i + 1].toInt() and 0xFF
-                val rr = row[i + 2].toInt() and 0xFF
-                px[o++] = (0xFF shl 24) or (rr shl 16) or (g shl 8) or b
-                i += 4
-            }
+            val o = (y + r) * width + x
+            ints.rewind()
+            ints.get(px, o, w)
+            for (i in o until o + w) px[i] = px[i] or OPAQUE
         }
     }
 
@@ -279,15 +280,19 @@ class RfbClient(private val host: String, private val port: Int, private val pas
 
     private fun send(block: () -> Unit) {
         if (closed) return
-        sender.execute {
-            try {
-                synchronized(writeLock) {
-                    block()
-                    output.flush()
+        try {
+            sender.execute {
+                try {
+                    synchronized(writeLock) {
+                        block()
+                        output.flush()
+                    }
+                } catch (e: IOException) {
+                    close()
                 }
-            } catch (e: IOException) {
-                close()
             }
+        } catch (e: java.util.concurrent.RejectedExecutionException) {
+            // The connection was closed between the check above and now; nothing left to send to.
         }
     }
 
@@ -323,5 +328,11 @@ class RfbClient(private val host: String, private val port: Int, private val pas
         val c = Cipher.getInstance("DES/ECB/NoPadding")
         c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "DES"))
         return c.doFinal(challenge)
+    }
+
+    private companion object {
+        /** About 4096x4096; a larger framebuffer from a server would exhaust a phone's memory. */
+        const val MAX_PIXELS = 16L * 1024 * 1024
+        const val OPAQUE = -0x1000000 // 0xFF000000
     }
 }
