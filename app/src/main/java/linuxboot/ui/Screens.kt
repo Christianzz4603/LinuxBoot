@@ -190,14 +190,14 @@ fun HomeScreen(vm: FirmwareViewModel, info: SystemInfo) {
                 Column {
                     Text("This device", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "${info.device} - ${info.arch.uppercase()} - ${info.cores} cores",
+                        "${info.device} - ${vm.arch?.label ?: info.arch} - ${info.cores} cores",
                         style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant,
                     )
                 }
             }
             Meter(R.drawable.ic_memory, "Memory in use", (info.totalMemBytes - info.availMemBytes).coerceAtLeast(0L), info.totalMemBytes)
             Meter(R.drawable.ic_storage, "Storage in use", (info.storageTotalBytes - info.storageFreeBytes).coerceAtLeast(0L), info.storageTotalBytes)
-            if (!info.isArm64) Banner(Tone.Bad, "This device does not report an ARM64 ABI, so native ARM64 Linux is not supported.")
+            if (vm.arch == null) Banner(Tone.Bad, "This processor is not one LinuxBoot supports (ARM, ARM64, x86 or x86-64).")
         }
 
         vm.desktopBusy?.let { BusyPanel(it.sentence() + "...", vm.desktopStatus) }
@@ -247,6 +247,7 @@ fun InstallListScreen(vm: FirmwareViewModel) {
             val m = vm.installed.firstOrNull { it.id == e.id }
             val (label, tone) = when {
                 vm.installingId == e.id -> "Installing" to Tone.Accent
+                m == null && !e.supports(vm.arch) -> "Not for this CPU" to Tone.Warn
                 m != null -> m.state.label.sentence() to stateTone(m.state)
                 else -> "Not installed" to Tone.Neutral
             }
@@ -361,7 +362,7 @@ fun InstallDetailScreen(vm: FirmwareViewModel, id: String) {
                             }
                         }
                         is SourceState.Error -> {
-                            Banner(Tone.Bad, "Could not reach the download source: ${src.message}")
+                            Banner(Tone.Bad, src.message)
                             AppButton("Try again", { vm.retryResolve(id) }, Modifier.fillMaxWidth(), style = Btn.Tonal)
                         }
                         is SourceState.Ready -> {
@@ -659,7 +660,8 @@ fun SettingsScreen(vm: FirmwareViewModel, onExit: () -> Unit) {
                 Text("Privacy and permissions", style = MaterialTheme.typography.titleMedium)
             }
             Text(
-                "LinuxBoot asks for one permission: Internet, used only to download root filesystems over HTTPS. " +
+                "Internet is used only to download root filesystems over HTTPS. Notifications and a foreground service " +
+                    "keep a running system alive while the app is in the background. " +
                     "The desktop's VNC server listens on this device only and uses a random password.",
                 style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant,
             )
@@ -684,7 +686,7 @@ fun HardwareScreen(vm: FirmwareViewModel, info: SystemInfo) {
                 InfoRow("Processor architecture", info.arch)
                 InfoRow("Supported ABIs", info.abis.joinToString(", "))
                 InfoRow("CPU cores", info.cores.toString())
-                InfoRow("Native ARM64 Linux", if (info.isArm64) "Supported" else "Not supported")
+                InfoRow("Linux guests", vm.arch?.let { "${it.label}, run natively (no emulation)" } ?: "Not supported on this processor")
             }
             Panel {
                 InfoRow("Memory", "${formatBytes(info.totalMemBytes)} total, ${formatBytes(info.availMemBytes)} available")
