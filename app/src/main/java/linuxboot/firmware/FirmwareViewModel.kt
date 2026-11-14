@@ -4,11 +4,13 @@ import android.app.Application
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -23,11 +25,13 @@ import linuxboot.distro.InstallStatus
 import linuxboot.distro.Installer
 import linuxboot.distro.Phase
 import linuxboot.distro.ResolvedSource
+import linuxboot.runtime.KeepAliveService
 import linuxboot.runtime.NativeRuntime
 import linuxboot.runtime.ProotRuntime
 import linuxboot.storage.Fs
 import linuxboot.storage.LinuxBootStorage
 import linuxboot.storage.StorageDecision
+import linuxboot.system.CpuArch
 import linuxboot.system.SystemInfo
 import linuxboot.system.formatBytes
 import java.io.File
@@ -68,7 +72,10 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
     val proot = ProotRuntime(app)
     val session = DesktopSession(proot)
     private val store = DistroStore(storage)
-    private val installer = Installer(storage, store)
+    /** The CPU type this app runs as; guests must match it. Null on a processor we do not support. */
+    val arch: CpuArch? = CpuArch.detect(app)
+    private val installer = Installer(storage, store, arch ?: CpuArch.ARM64)
+    private val sourceCache = HashMap<String, Pair<Long, ResolvedSource>>()
     private var job: Job? = null
     private var desktopJob: Job? = null
     private var client: RfbClient? = null
@@ -109,13 +116,36 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
     var opBusy by mutableStateOf<String?>(null)
         private set
 
+    /** True while anything long-running needs the app process to stay alive in the background. */
+    private val keepAlive: Boolean
+        get() = installingId != null || desktopBusy != null || sessionRunning || opBusy != null || shellRunning
+
     init {
-        viewModelScope.launch { refresh() }
+        // Do not walk every root filesystem just to open the app; usage is measured when it is shown.
+        viewModelScope.launch { refresh(withUsage = false) }
+        // Android can freeze or kill a backgrounded app and its child processes (the desktop).
+        // A foreground service keeps them running for exactly as long as something needs it.
+        viewModelScope.launch {
+            snapshotFlow { keepAlive }.distinctUntilChanged().collect { KeepAliveService.setRunning(getApplication(), it) }
+        }
     }
 
-    private suspend fun refresh() {
+    private var usageAt = 0L
+
+    /**
+     * Re-reads installed systems. Disk usage means walking every file of every root filesystem, so it is
+     * only recomputed when asked for ([withUsage]) and a system is new, the caller forces it after a big
+     * operation, or the last measurement is over a minute old.
+     */
+    private suspend fun refresh(withUsage: Boolean = true, force: Boolean = false) {
         val list = withContext(Dispatchers.IO) { store.list() }
-        val sizes = withContext(Dispatchers.IO) { list.associate { it.id to store.usage(it) } }
+        val now = System.currentTimeMillis()
+        val needUsage = withUsage && (force || now - usageAt > 60_000L || list.any { it.id !in usage })
+        val sizes = if (needUsage) {
+            withContext(Dispatchers.IO) { list.associate { it.id to store.usage(it) } }.also { usageAt = now }
+        } else {
+            usage
+        }
         val cache = withContext(Dispatchers.IO) {
             Fs.treeSize(storage.downloads) + Fs.treeSize(storage.cache)
         }
@@ -140,7 +170,10 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
                 loadDecision()
                 resolveSource(s.id)
             }
-            is Screen.DistroDetail -> shellText = null
+            is Screen.DistroDetail -> {
+                shellText = null
+                viewModelScope.launch { refresh() }
+            }
             Screen.Config -> loadDecision()
             Screen.Boot, Screen.BootManager, Screen.Recovery, Screen.InstallList ->
                 viewModelScope.launch { refresh() }
@@ -167,19 +200,37 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun resolveSource(id: String) {
         val entry = Catalog.find(id) ?: return
+        val cpu = arch
+        if (cpu == null || !entry.supports(cpu)) {
+            source = SourceState.Error(
+                "${entry.name} is not published for ${cpu?.label ?: "this"} processors, so it cannot run " +
+                    "natively on this device. LinuxBoot does not emulate other CPUs.",
+            )
+            return
+        }
+        // Release lookups are 2 to 3 network requests; reuse one for five minutes.
+        sourceCache[id]?.takeIf { System.currentTimeMillis() - it.first < 5 * 60_000L }?.let {
+            source = SourceState.Ready(it.second)
+            return
+        }
         source = SourceState.Loading
         viewModelScope.launch {
             source = try {
-                SourceState.Ready(entry.resolve())
+                val src = entry.resolve(cpu)
+                sourceCache[id] = System.currentTimeMillis() to src
+                SourceState.Ready(src)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                SourceState.Error(e.message ?: e.javaClass.simpleName)
+                SourceState.Error("Could not reach the download source: ${e.message ?: e.javaClass.simpleName}")
             }
         }
     }
 
-    fun retryResolve(id: String) = resolveSource(id)
+    fun retryResolve(id: String) {
+        sourceCache.remove(id)
+        resolveSource(id)
+    }
 
     fun startInstall(id: String) {
         if (job?.isActive == true) return
