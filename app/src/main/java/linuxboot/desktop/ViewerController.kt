@@ -152,6 +152,7 @@ class ViewerController(
 
     fun zoomBy(factor: Float, focal: Offset) {
         val old = scale
+        if (old <= 0f) return
         val fx = (focal.x - baseX) / old
         val fy = (focal.y - baseY) / old
         zoom = (zoom * factor).coerceIn(1f, 8f)
@@ -192,12 +193,14 @@ class ViewerController(
 
     private fun setCursorFromScreen(p: Offset) {
         val s = scale
+        if (s <= 0f) return
         cursorX = ((p.x - baseX) / s).coerceIn(0f, max(0f, fbW - 1f))
         cursorY = ((p.y - baseY) / s).coerceIn(0f, max(0f, fbH - 1f))
     }
 
     fun moveBy(d: Offset) {
         val s = scale
+        if (s <= 0f) return
         cursorX = (cursorX + d.x / s).coerceIn(0f, max(0f, fbW - 1f))
         cursorY = (cursorY + d.y / s).coerceIn(0f, max(0f, fbH - 1f))
         keepCursorVisible()
@@ -278,10 +281,16 @@ class ViewerController(
     fun <T> withBitmap(block: (Bitmap?) -> T): T = synchronized(bmpLock) { block(bitmap) }
 
     override fun onSize(width: Int, height: Int) {
-        synchronized(bmpLock) {
-            val b = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            b.setPixels(client.pixels, 0, width, 0, 0, width, height)
-            bitmap = b
+        try {
+            synchronized(bmpLock) {
+                val b = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                b.setPixels(client.pixels, 0, width, 0, 0, width, height)
+                bitmap = b
+            }
+        } catch (e: OutOfMemoryError) {
+            closedReason = "Not enough memory for a ${width} x $height picture. Pick a smaller resolution."
+            closed = true
+            return
         }
         fbW = width
         fbH = height
@@ -293,7 +302,11 @@ class ViewerController(
 
     override fun onUpdate(x: Int, y: Int, w: Int, h: Int) {
         synchronized(bmpLock) {
-            bitmap?.setPixels(client.pixels, y * client.width + x, client.width, x, y, w, h)
+            try {
+                bitmap?.setPixels(client.pixels, y * client.width + x, client.width, x, y, w, h)
+            } catch (e: IllegalArgumentException) {
+                // a stale rectangle from before a resize; the next full update repaints it
+            }
         }
         frame++
     }
