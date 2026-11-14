@@ -7,6 +7,7 @@ import linuxboot.runtime.NativeRuntime
 import linuxboot.storage.Fs
 import linuxboot.storage.LinuxBootStorage
 import linuxboot.storage.Placement
+import linuxboot.system.CpuArch
 import linuxboot.system.formatBytes
 import java.io.File
 import java.io.IOException
@@ -36,7 +37,11 @@ data class InstallStatus(
  * Not done yet: creating a Linux user, and installing packages or a desktop inside
  * the rootfs under PRoot. The distribution is registered as INSTALLED (rootfs ready).
  */
-class Installer(private val storage: LinuxBootStorage, private val store: DistroStore) {
+class Installer(
+    private val storage: LinuxBootStorage,
+    private val store: DistroStore,
+    private val arch: CpuArch,
+) {
 
     suspend fun install(entry: CatalogEntry, onStatus: (InstallStatus) -> Unit): Result<Unit> =
         withContext(Dispatchers.IO) {
@@ -62,8 +67,11 @@ class Installer(private val storage: LinuxBootStorage, private val store: Distro
                 File(dir, "config").mkdirs()
                 logFile = File(dir, "logs/install.log")
 
+                check(entry.supports(arch)) {
+                    "${entry.name} is not published for ${arch.label} processors, so it cannot run natively here"
+                }
                 say(InstallStatus(Phase.RESOLVING, "Looking up the current ${entry.name} release"))
-                val src = entry.resolve()
+                val src = entry.resolve(arch)
                 val place = storage.placement(entry.id, decision.location)
 
                 val margin = 32L * 1024 * 1024
