@@ -242,7 +242,7 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
                 installer.install(entry) { status = it }
             } finally {
                 installingId = null
-                withContext(NonCancellable) { refresh() }
+                withContext(NonCancellable) { refresh(force = true) }
             }
         }
     }
@@ -321,7 +321,7 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
                 log("FAILED: ${e.message}")
             } finally {
                 desktopBusy = null
-                withContext(NonCancellable) { refresh() }
+                withContext(NonCancellable) { refresh(force = true) }
             }
         }
     }
@@ -470,7 +470,7 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
                 notice = "BACKUP FAILED: ${e.message}"
             } finally {
                 opBusy = null
-                withContext(NonCancellable) { refresh() }
+                withContext(NonCancellable) { refresh(force = true) }
             }
         }
     }
@@ -527,7 +527,7 @@ class FirmwareViewModel(app: Application) : AndroidViewModel(app) {
                 notice = "RESTORE FAILED: ${e.message}"
             } finally {
                 opBusy = null
-                withContext(NonCancellable) { refresh() }
+                withContext(NonCancellable) { refresh(force = true) }
             }
         }
     }
