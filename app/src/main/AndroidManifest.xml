@@ -3,6 +3,11 @@
 
     <!-- Only used to download root filesystems over HTTPS. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Keep an install or a running Linux desktop alive while the app is in the background. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"
@@ -21,5 +26,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service
+            android:name=".runtime.KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Runs a Linux environment (installs, desktop sessions and backups) while the app is in the background" />
+        </service>
     </application>
 </manifest>
